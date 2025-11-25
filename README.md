@@ -31,7 +31,8 @@ Top-level keys:
 | `on_blocks`            | String | No       | `HH:MM` zulu.                             |
 | `people`               | Array  | No       | Crew list (see below).                    |
 | `takeoffs_and_landings`| Object | No       | `{ "takeoffs": n, "landings": n }`.       |
-| `is_deleted`           | Bool   | No       | For API: soft-delete caller’s own entry.  |
+| `is_deleted`           | Bool   | No       | For API: soft-delete caller's own entry.  |
+| `update_flight_data`   | Bool   | No       | Auto-update from external sources (default: true). |
 
 **Flight `people` object:**
 | Field    | Type   | Required | Description                                                          |
