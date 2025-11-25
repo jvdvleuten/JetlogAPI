@@ -2,7 +2,7 @@
 
 Two ways to bring flights into Jetlog:
 - **Deeplink (jetlog://import?data=…)** – for end users/scripts that can open the Jetlog app.
-- **External Partner API (/external/v1/import)** – HTTP endpoint with dual-key auth (`Bearer <user_key>:<partner_key>`).
+- **External Partner API (https://jetlog.app/external/v1/import)** – HTTP endpoint with dual-key auth (`Bearer <user_key>:<partner_key>`).
 
 The **JSON payload is the same** for both flows (see “Payload schema” below).
 
@@ -122,7 +122,7 @@ Authorization: Bearer <user_key>:<partner_key>
 
 **Example request**
 ```sh
-curl -X POST https://api.your-jetlog-host/external/v1/import \
+curl -X POST https://jetlog.app/external/v1/import \
   -H "Authorization: Bearer USER_KEY:PARTNER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
