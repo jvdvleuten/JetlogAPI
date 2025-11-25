@@ -118,7 +118,6 @@ Authorization: Bearer <user_key>:<partner_key>
 - Entry match: per user by `date + flight_number + entry_source` (set server-side to `external`); updates or creates accordingly.
 - Soft-delete: `is_deleted: true` deletes only the caller’s own external entries.
 - People: matched/created by refs/employee numbers; `SELF` = authenticated user.
-- Aircraft fields are ignored here (we do not alter user aircraft via this API).
 - Success: `{"data": "OK"}`; errors return `{"error": "<message>"}`.
 
 **Example request**
