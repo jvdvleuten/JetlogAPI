@@ -115,10 +115,14 @@ Authorization: Bearer <user_key>:<partner_key>
 ```
 
 **Behavior**
-- Entry match: per user by `date + flight_number + entry_source` (set server-side to `external`); updates or creates accordingly.
+- Entry match: per user by `date + flight_number + from + to`; updates or creates accordingly.
+- Required fields: `from` and `to` must be provided for the External Partner API.
 - Soft-delete: `is_deleted: true` deletes only the caller’s own external entries.
 - People: matched/created by refs/employee numbers; `SELF` = authenticated user.
-- Success: `{"data": "OK"}`; errors return `{"error": "<message>"}`.
+- Success: `{"data": "OK", "skipped": [...]}`; errors return `{"error": "<message>"}`.
+- Skipped reasons:
+  - `"duplicate"`: entry matches existing entry from a different source (fields: `date`, `flight_number`, `from`, `to`, `reason`).
+  - `"missing_route"`: entry lacks `from` and `to` (fields: `date`, `flight_number`, `reason`).
 
 **Example request**
 ```sh
@@ -139,6 +143,22 @@ curl -X POST https://jetlog.app/external/v1/import \
     ],
     "people":[]
   }'
+```
+
+**Example response**
+```json
+{"data": "OK", "skipped": []}
+```
+
+With skipped entries:
+```json
+{
+  "data": "OK",
+  "skipped": [
+    {"date": "2025-12-10", "flight_number": "KL1023", "from": "EHAM", "to": "EGLL", "reason": "duplicate"},
+    {"date": "2025-12-11", "flight_number": "KL2000", "reason": "missing_route"}
+  ]
+}
 ```
 
 ## Tips
