@@ -137,8 +137,7 @@ curl -X POST https://jetlog.app/external/v1/import \
         "flight_number":"KL1023",
         "from":"EHAM",
         "to":"EGLL",
-        "people":[{"ref_id":"SELF","role":"PIC"}],
-        "takeoffs_and_landings":{"takeoffs":1,"landings":1}
+        "people":[{"ref_id":"SELF","role":"PIC"}]
       }
     ],
     "people":[]
