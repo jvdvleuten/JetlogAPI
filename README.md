@@ -8,6 +8,8 @@ The **JSON payload is the same** for both flows (see “Payload schema” below)
 
 Ready-to-use payloads, encoded deeplinks and curl calls: **[EXAMPLES.md](EXAMPLES.md)**.
 
+Every example in this repo is validated by `python3 scripts/validate_examples.py`, and both flows' payloads are asserted against the real importers by tests in the backend and iOS repos — so an example that stops working fails a build rather than misleading you.
+
 ## Payload schema (shared)
 Top-level keys:
 ```json
