@@ -340,16 +340,21 @@ result if you rely on the conversion.
 ```json
 {"data": "OK", "skipped": [
   {"date": "2026-08-14", "flight_number": "KL1023", "from": "EHAM", "to": "EGLL", "reason": "duplicate"},
-  {"date": "2026-08-15", "flight_number": "KL2000", "reason": "missing_route"}
+  {"date": "2026-08-15", "flight_number": "KL2000", "reason": "missing_route"},
+  {"date": "2026-08-16", "flight_number": "SIM1", "type": "fstd", "reason": "unsupported_type"}
 ]}
 ```
 
 - `duplicate` — the flight already exists from another source (the app, a roster
   import, another partner). Those are never modified.
 - `missing_route` — `from`/`to` were absent, which the API requires.
+- `unsupported_type` — `type` was not `"flight"`. Carries `type` as well, and
+  nothing is stored for that row.
 
-Anything else returns a non-200 with `{"error": "…"}`, and no entry in the
-request is written.
+Rows are independent: a skipped row does not stop the rest of the payload from
+importing, so always read `skipped` rather than assuming a 200 means every row
+landed. A malformed request that cannot be processed at all returns a non-200
+with `{"error": "…"}` and writes nothing.
 
 ---
 

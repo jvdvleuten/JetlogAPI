@@ -62,7 +62,7 @@ Top-level keys:
 
 Remarks are the pilot's own text, so an import can add them but not quietly replace them:
 
-- **External Partner API** — write-once. Remarks are stored when the partner *creates* the entry and are never touched by a re-import, so a note the pilot wrote (or edited) always wins. A partner cannot correct its own earlier remark.
+- **External Partner API** — write-once. Remarks are written whenever the entry has none, so you can add them on a later import of a flight you sent earlier without them. Once an entry *has* remarks they are never replaced — whoever wrote them, your own earlier import or the pilot in the app. A partner cannot correct its own earlier remark.
 - **Deeplink** — the import preview shows the remarks change as `existing → new` before anything is written, and offers a **Replace / Add** choice on that row. `Add` keeps the stored note and appends the imported text after it; re-importing the same text twice does not stack it. When the entry has no remarks yet, the imported value is simply written and no choice is offered.
 
 **Where the two flows differ**
@@ -73,7 +73,7 @@ Despite the shared payload, these differ — check them if you support both:
 | :-- | :-- | :-- |
 | `people` top-level key | **Required** (omitting it fails the whole payload) | Optional |
 | `type` on an entry | **Required** | Defaults to `"flight"` |
-| Non-`"flight"` entries | Silently dropped | Accepted, but nothing is stored |
+| Non-`"flight"` entries | Silently dropped | Reported in `skipped` as `unsupported_type` |
 | Entry required fields | `flight_number` **or** `registration` | `from` **and** `to` |
 | `takeoffs_and_landings` | `{takeoffs, landings}` only, both required | Also accepts the day/night split |
 | `update_flight_data` when omitted | Inferred: `false` if any actual time is supplied, else `true` | Always defaults to `true` |
@@ -127,6 +127,8 @@ Steps:
 - URL length: split if payloads are huge.
 - Errors: invalid fields/refs may yield partial or failed imports.
 - Times are `HH:MM` zulu relative to the flight date.
+- Opening a link never writes anything on its own — the app shows an import preview the user confirms.
+- A row that deletes an existing entry (`is_deleted: true`) is called out in that preview and **starts unselected**: the user has to opt in before it is applied. Don't rely on a link alone to remove a flight.
 
 ## External Partner API
 
@@ -157,6 +159,8 @@ Authorization: Bearer <user_key>:<partner_key>
 - Skipped reasons:
   - `"duplicate"`: entry matches existing entry from a different source (fields: `date`, `flight_number`, `from`, `to`, `reason`).
   - `"missing_route"`: entry lacks `from` and `to` (fields: `date`, `flight_number`, `reason`).
+  - `"unsupported_type"`: entry `type` is not `"flight"` (fields: `date`, `flight_number`, `type`, `reason`). Nothing is stored for it.
+- Rows are independent: one skipped or rejected row does not prevent the rest of the payload from importing.
 
 **Example request**
 ```sh
