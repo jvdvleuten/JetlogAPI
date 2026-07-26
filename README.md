@@ -6,6 +6,8 @@ Two ways to bring flights into Jetlog:
 
 The **JSON payload is the same** for both flows (see “Payload schema” below).
 
+Ready-to-use payloads, encoded deeplinks and curl calls: **[EXAMPLES.md](EXAMPLES.md)**.
+
 ## Payload schema (shared)
 Top-level keys:
 ```json
@@ -21,17 +23,19 @@ Top-level keys:
 | `type`                 | String | Yes      | Must be `"flight"`.                       |
 | `date`                 | String | Yes      | `YYYY-MM-DD`.                             |
 | `flight_number`        | String | No       | Flight number.                            |
-| `scheduled_off_blocks` | String | No       | `HH:MM` zulu.                             |
-| `registration`         | String | No       | Aircraft registration.                    |
-| `from`                 | String | No       | ICAO departure.                           |
-| `to`                   | String | No       | ICAO arrival.                             |
+| `scheduled_off_blocks` | String | No       | Planned off-blocks, `HH:MM` zulu.         |
+| `scheduled_on_blocks`  | String | No       | Planned on-blocks, `HH:MM` zulu.          |
+| `registration`         | String | No       | Aircraft registration. Normalised to uppercase with separators stripped (`PH-BXD` → `PHBXD`). |
+| `from`                 | String | No       | ICAO departure. A 3-letter IATA code is converted when recognised; an unrecognised one is stored as given. |
+| `to`                   | String | No       | ICAO arrival. Same IATA handling as `from`. |
 | `off_blocks`           | String | No       | `HH:MM` zulu.                             |
 | `airborne`             | String | No       | `HH:MM` zulu.                             |
 | `touchdown`            | String | No       | `HH:MM` zulu.                             |
 | `on_blocks`            | String | No       | `HH:MM` zulu.                             |
 | `people`               | Array  | No       | Crew list (see below).                    |
-| `takeoffs_and_landings`| Object | No       | `{ "takeoffs": n, "landings": n }`.       |
-| `is_deleted`           | Bool   | No       | For API: soft-delete caller's own entry.  |
+| `takeoffs_and_landings`| Object | No       | `{ "takeoffs": n, "landings": n }` — send **both** counts. The API also accepts a day/night split (see its Behavior section); the deeplink does not. |
+| `remarks`              | String | No       | Free text, max 1000 characters. **Never overwrites remarks the entry already has** — see the per-flow rules below. |
+| `is_deleted`           | Bool   | No       | Soft-delete an entry this caller created. `false` restores one. |
 | `update_flight_data`   | Bool   | No       | Auto-update from external sources (default: true). |
 
 **Flight `people` object:**
@@ -51,7 +55,31 @@ Top-level keys:
 
 **Notes on people**
 - You can use `SELF` in a flight without adding a top-level person for yourself.
-- If you include yourself in `people`, your details may be updated by the payload.
+- `ref_id` is payload-local: it links `entries[*].people[*].ref_id` to `people[*].ref_id` and is not stored.
+- Whether an existing person can be modified by the payload differs per flow — for the External Partner API, see "People" under its Behavior section below.
+
+**Remarks are never silently overwritten**
+
+Remarks are the pilot's own text, so an import can add them but not quietly replace them:
+
+- **External Partner API** — write-once. Remarks are stored when the partner *creates* the entry and are never touched by a re-import, so a note the pilot wrote (or edited) always wins. A partner cannot correct its own earlier remark.
+- **Deeplink** — the import preview shows the remarks change as `existing → new` before anything is written, and offers a **Replace / Add** choice on that row. `Add` keeps the stored note and appends the imported text after it; re-importing the same text twice does not stack it. When the entry has no remarks yet, the imported value is simply written and no choice is offered.
+
+**Where the two flows differ**
+
+Despite the shared payload, these differ — check them if you support both:
+
+| | Deeplink | External Partner API |
+| :-- | :-- | :-- |
+| `people` top-level key | **Required** (omitting it fails the whole payload) | Optional |
+| `type` on an entry | **Required** | Defaults to `"flight"` |
+| Non-`"flight"` entries | Silently dropped | Accepted, but nothing is stored |
+| Entry required fields | `flight_number` **or** `registration` | `from` **and** `to` |
+| `takeoffs_and_landings` | `{takeoffs, landings}` only, both required | Also accepts the day/night split |
+| `update_flight_data` when omitted | Inferred: `false` if any actual time is supplied, else `true` | Always defaults to `true` |
+| `remarks` on a re-import | Replace / Add choice in the preview | Write-once; never overwritten |
+| Unresolvable `people[].ref_id` | Kept for the import review to resolve | Dropped from the crew list |
+| Matching an existing person | May update their `default_role`; also matches on a single name | Never modifies an existing person; matches `employee_number` then first+last only |
 
 ## Deeplink Import
 
@@ -117,8 +145,14 @@ Authorization: Bearer <user_key>:<partner_key>
 **Behavior**
 - Entry match: per user by `date + flight_number + from + to`; updates or creates accordingly.
 - Required fields: `from` and `to` must be provided for the External Partner API.
-- Soft-delete: `is_deleted: true` deletes only the caller’s own external entries.
-- People: matched/created by refs/employee numbers; `SELF` = authenticated user.
+- Soft-delete: `is_deleted: true` deletes only the caller’s own external entries. Sending `is_deleted: false` for the same flight restores one you previously deleted.
+- Entries from another source (the app itself, a roster import, another partner) are never modified — they come back as `"duplicate"` in `skipped`.
+- People:
+  - A submitted person is matched against the people the user already has: first by `employee_number`, otherwise by `first_name` + `last_name` (ignoring case and surrounding whitespace).
+  - **A matched person is reused but never modified.** The API will not rename an existing contact, change their `default_role`, or alter their `employee_number` — this includes the user's own profile. Only a person matching nothing is created, using every field supplied.
+  - `SELF` = the authenticated user. A submitted person that matches the user's own profile resolves to it instead of creating a duplicate contact.
+  - Two `ref_id`s resolving to the same person collapse to one crew assignment on an entry (the first `role` wins). A `ref_id` that resolves to nothing is dropped from the crew list.
+  - Crew is merged, never replaced: omitting `people` — or sending `[]` — on a re-import keeps the existing crew. There is no way to remove crew from an entry via this API.
 - Success: `{"data": "OK", "skipped": [...]}`; errors return `{"error": "<message>"}`.
 - Skipped reasons:
   - `"duplicate"`: entry matches existing entry from a different source (fields: `date`, `flight_number`, `from`, `to`, `reason`).
