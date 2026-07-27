@@ -54,7 +54,7 @@ curl -X POST https://jetlog.app/external/v1/import \
 
 ### Every supported field (deeplink-safe)
 
-All entry fields both flows accept, including the planned times and remarks.
+All entry fields both flows accept, including the planned times and remarks. (`update_flight_data` is shown explicitly here; omitting it would infer the same `false` on both flows, because the payload carries actual times — see the field table in the README.)
 
 ```json
 {

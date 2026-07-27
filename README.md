@@ -38,7 +38,7 @@ Top-level keys:
 | `takeoffs_and_landings`| Object | No       | `{ "takeoffs": n, "landings": n }`, or the day/night split `{ "takeoffs_day": n, "takeoffs_night": n, "landings_day": n, "landings_night": n }` — send **both** counts of whichever shape you use. Both flows accept either shape. |
 | `remarks`              | String | No       | Free text, max 1000 characters. **Never overwrites remarks the entry already has** — see the per-flow rules below. |
 | `is_deleted`           | Bool   | No       | Soft-delete an entry this caller created. `false` restores one. |
-| `update_flight_data`   | Bool   | No       | Auto-update from external sources (default: true). |
+| `update_flight_data`   | Bool   | No       | Auto-update from external sources. An explicit value always applies. When omitted, both flows infer it: on **create**, `false` if any actual time (`off_blocks`/`airborne`/`touchdown`/`on_blocks`) is supplied — so your reported times are what's shown — else `true`; on a **re-import/merge** of an existing entry, the inferred switch to `false` happens only when the import actually brings a new or changed actual time, otherwise the entry's stored setting is left untouched (a byte-identical re-import never flips it). |
 
 **Flight `people` object:**
 | Field    | Type   | Required | Description                                                          |
@@ -89,13 +89,12 @@ Remarks are the pilot's own text, so an import can add them but not quietly repl
 
 **Where the two flows differ**
 
-`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), and non-`"flight"` rows are all handled the same way now (optional/defaulted/tolerated on both). What's left genuinely differs — check these if you support both:
+`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), non-`"flight"` rows, and the `update_flight_data` inference (see the field table above) are all handled the same way now (optional/defaulted/tolerated on both). What's left genuinely differs — check these if you support both:
 
 | | Deeplink | External Partner API |
 | :-- | :-- | :-- |
 | Entry required fields | `flight_number` **or** `registration` | `from` **and** `to` |
 | An incomplete `{takeoffs, landings}` pair (only one of the two counts sent) — or an unrecognised explicit `takeoffs_and_landings.type` (anything other than `"auto"`/`"manual"`) | Entry still imports; only the counts are dropped, flagged as a per-row error in the import preview | Whole row skipped — `"invalid_field"`, e.g. `"fields": ["takeoffs_and_landings.landings"]` |
-| `update_flight_data` when omitted | On **create**: inferred (`false` if any actual time is supplied, else `true`). On **merge** into an existing entry: an explicit value always applies; the *inferred* switch to manual (`false`) applies only if the merge itself writes at least one new imported actual time (`off_blocks`/`airborne`/`touchdown`/`on_blocks`) onto the entry — otherwise the entry's stored value is left untouched | Defaults to `true` on **create** only. On an **amend** (updating an already-matched entry), omitting it leaves the entry's stored value untouched — it does not reset to `true` |
 | `remarks` on a re-import | Replace / Add choice in the preview | Write-once; never overwritten |
 | Unresolvable `people[].ref_id` | Kept for the import review to resolve | Entry still imports without that crew member; reported in the response's `warnings` array |
 | Matching an existing person | May update their `default_role`, but only when the payload actually supplies one — omitting it never wipes an existing role; also matches on a single name | Never modifies an existing person; matches `employee_number` then first+last only |
