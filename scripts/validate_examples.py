@@ -45,8 +45,8 @@ def check_entries_payload(where: str, payload: object, *, deeplink: bool) -> Non
         fail(where, "missing or non-list `entries`")
         return
 
-    if deeplink and "people" not in payload:
-        fail(where, "a deeplink payload must carry the top-level `people` key")
+    # Both flows now default an omitted top-level `people` key to `[]` and a
+    # missing/null entry `type` to `"flight"` — no longer flagged as mistakes.
 
     for i, entry in enumerate(entries):
         at = f"{where} entries[{i}]"
@@ -54,11 +54,11 @@ def check_entries_payload(where: str, payload: object, *, deeplink: bool) -> Non
             fail(at, "entry is not an object")
             continue
 
-        if deeplink and "type" not in entry:
-            fail(at, "a deeplink entry must carry `type`")
-
         if deeplink and not (entry.get("flight_number") or entry.get("registration")):
             fail(at, "a deeplink entry needs `flight_number` or `registration`")
+
+        if not deeplink and not (entry.get("from") and entry.get("to")):
+            fail(at, "an API entry needs `from` and `to`")
 
         date = entry.get("date")
         if isinstance(date, str) and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
@@ -67,10 +67,14 @@ def check_entries_payload(where: str, payload: object, *, deeplink: bool) -> Non
         tal = entry.get("takeoffs_and_landings")
         if isinstance(tal, dict):
             auto = "takeoffs" in tal or "landings" in tal
+            day_night = any(k in tal for k in ("takeoffs_day", "takeoffs_night", "landings_day", "landings_night"))
             if auto and not ("takeoffs" in tal and "landings" in tal):
-                fail(at, "takeoffs_and_landings must carry BOTH counts")
-            if deeplink and tal.get("type") == "manual":
-                fail(at, "the day/night shape is API-only, not valid in a deeplink")
+                fail(at, "the `{takeoffs, landings}` shape must carry BOTH counts")
+            if day_night and not all(
+                k in tal for k in ("takeoffs_day", "takeoffs_night", "landings_day", "landings_night")
+            ):
+                fail(at, "the day/night shape must carry all four counts")
+            # Both flows accept either shape now (day/night used to be API-only).
 
 
 for name in DOCS:

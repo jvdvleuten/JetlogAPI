@@ -4,12 +4,14 @@ Copy-paste examples for both import flows. Every payload below is valid for the
 **External Partner API**; the ones marked *deeplink-safe* also work as a
 `jetlog://import?data=…` link.
 
-Two rules catch most mistakes:
+One rule catches most mistakes:
 
-- A **deeplink** requires the top-level `people` key (send `[]` if there is no
-  crew) and requires `type` on every entry. The API defaults both.
 - A **deeplink** entry needs `flight_number` **or** `registration`. An **API**
   entry needs `from` **and** `to`.
+
+Everything else — the top-level `people` key, an entry's `type`, and the
+takeoffs/landings shape — is optional/defaulted/tolerated the same way by both
+flows now; see the README's schema table for specifics.
 
 Times are `HH:MM` zulu relative to `date`. Dates are strictly `YYYY-MM-DD` —
 `01-03-2026` is rejected by both flows.
@@ -281,9 +283,11 @@ curl -X POST https://jetlog.app/external/v1/import \
   -d '{"entries":[{"type":"flight","date":"2026-08-14","flight_number":"KL1023","from":"EHAM","to":"EGLL","is_deleted":true}],"people":[]}'
 ```
 
-### Day/night takeoffs and landings — API only
+### Day/night takeoffs and landings (deeplink-safe)
 
-The API accepts the split shape. **The deeplink rejects it** and only understands `{"takeoffs": n, "landings": n}`, so no deeplink is given here.
+Both flows accept the split shape, in addition to the plain `{"takeoffs": n, "landings": n}` counts shown earlier — send whichever matches how you track landings.
+
+The `"type"` key inside `takeoffs_and_landings` is optional, and both flows resolve it the same way: an explicit `"type"` (e.g. `"manual"`) is honored and short-circuits inference. When it's absent, both flows infer instead — checking the plain `takeoffs`/`landings` counts first, and only falling back to the day/night counts if those aren't present. An empty `takeoffs_and_landings: {}` is ignored silently either way: no error, no counts recorded. An explicit `"type"` that isn't `"auto"` or `"manual"` is rejected — the API skips the whole row as `"invalid_field"`, while the deeplink imports the entry, drops just the counts, and flags the invalid type as a per-row error in the import preview (see the flow-differences table in the README).
 
 ```json
 {
@@ -305,6 +309,12 @@ The API accepts the split shape. **The deeplink rejects it** and only understand
   ],
   "people": []
 }
+```
+
+**Deeplink**
+
+```
+jetlog://import?data=%7B%22entries%22%3A%5B%7B%22type%22%3A%22flight%22%2C%22date%22%3A%222026-08-17%22%2C%22flight_number%22%3A%22KL1701%22%2C%22from%22%3A%22EHAM%22%2C%22to%22%3A%22LTFM%22%2C%22takeoffs_and_landings%22%3A%7B%22type%22%3A%22manual%22%2C%22takeoffs_day%22%3A1%2C%22takeoffs_night%22%3A0%2C%22landings_day%22%3A0%2C%22landings_night%22%3A1%7D%7D%5D%2C%22people%22%3A%5B%5D%7D
 ```
 
 **API**
@@ -341,7 +351,10 @@ result if you rely on the conversion.
 {"data": "OK", "skipped": [
   {"date": "2026-08-14", "flight_number": "KL1023", "from": "EHAM", "to": "EGLL", "reason": "duplicate"},
   {"date": "2026-08-15", "flight_number": "KL2000", "reason": "missing_route"},
-  {"date": "2026-08-16", "flight_number": "SIM1", "type": "fstd", "reason": "unsupported_type"}
+  {"date": "2026-08-16", "flight_number": "SIM1", "type": "fstd", "reason": "unsupported_type"},
+  {"date": "2026-08-17", "flight_number": "KL1701", "from": "EHAM", "to": "LTFM", "reason": "duplicate_in_payload"},
+  {"date": "2026-08-18", "flight_number": "KL1801", "reason": "invalid_field", "fields": ["off_blocks"]},
+  {"date": "2026-08-19", "flight_number": "KL1802", "reason": "invalid_field", "fields": ["takeoffs_and_landings.landings"]}
 ]}
 ```
 
@@ -350,11 +363,48 @@ result if you rely on the conversion.
 - `missing_route` — `from`/`to` were absent, which the API requires.
 - `unsupported_type` — `type` was not `"flight"`. Carries `type` as well, and
   nothing is stored for that row.
+- `duplicate_in_payload` — this same `(date, flight_number, from, to)` identity
+  appeared more than once in this request; the **last** occurrence was
+  imported and the earlier one(s) are reported this way.
+- `deleted` — a same-source entry with this identity exists but is
+  soft-deleted, and this row said nothing about `is_deleted`. Send
+  `is_deleted: false` with the same identity to restore it instead of
+  resending the row as-is.
+- `invalid_field` — the row failed the same field-level validation a direct
+  write would (an unparsable time, an incomplete `takeoffs_and_landings`
+  pair, ...); `fields` names what failed. Only this row is skipped, the rest
+  of the batch still imports. A field inside an embedded object is dotted —
+  `"takeoffs_and_landings.landings"`, not just `"landings"`.
+
+A soft-deleted entry doesn't lock out a re-import forever, either: it only
+reserves the identity for *its own* source. If a flight you deleted is
+re-imported by a different source (the app itself, a roster import, another
+partner), that import creates a new, live row alongside your deleted one
+rather than reviving or merging into it.
+
+An entry can import successfully and still be worth a second look: a
+`"warnings"` array rides alongside (never instead of) `skipped` whenever
+there's something to flag —
+
+```json
+{"data": "OK", "skipped": [], "warnings": [
+  {"date": "2026-08-19", "flight_number": "KL1901", "ref_id": "GHOST", "reason": "unresolved_person_ref"}
+]}
+```
+
+- `unresolved_person_ref` — a crew member's `ref_id` didn't resolve to a known
+  person. The flight still imports, just without that crew member.
 
 Rows are independent: a skipped row does not stop the rest of the payload from
-importing, so always read `skipped` rather than assuming a 200 means every row
-landed. A malformed request that cannot be processed at all returns a non-200
-with `{"error": "…"}` and writes nothing.
+importing, so always read `skipped` (and `warnings`) rather than assuming a 200
+means every row landed exactly as sent. A malformed request that cannot be
+processed at all returns a non-200 with `{"error": "…"}` — always a short,
+stable string, never a raw changeset or internal id. That non-200 does **not**
+guarantee nothing was written, though: `people` and `entries` are committed in
+separate transactions, people first, so a batch that later fails while
+processing `entries` can still leave newly-created `people` rows behind. It's
+safe to resend the same payload — those people will match on the retry
+instead of being duplicated.
 
 ---
 
