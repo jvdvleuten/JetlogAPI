@@ -248,6 +248,45 @@ curl -X POST https://jetlog.app/external/v1/import \
   -d '{"entries":[{"type":"flight","date":"2026-08-14","flight_number":"KL1023","from":"EHAM","to":"EGLL","remarks":"Diverted to EGKK for weather."}],"people":[]}'
 ```
 
+### Clearing a value you already imported (deeplink-safe)
+
+Re-send the same identity with a field set to explicit `null` to clear it — the one case where `null` isn't the same as leaving the key out (see the README's "What a JSON `null` means depends on the field"). Only the 6 clearable value fields work this way: `off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`, `takeoffs_and_landings`. `scheduled_off_blocks`/`scheduled_on_blocks` are not among them — a `null` there is treated as omitted, because the flight-data feed refills a nil scheduled column itself and neither field has a per-field timestamp for a clear to hold against.
+
+Given an entry already imported with `"off_blocks": "07:05"`, this clears it:
+
+```json
+{
+  "entries": [
+    {
+      "type": "flight",
+      "date": "2026-08-16",
+      "flight_number": "KL1601",
+      "from": "EHAM",
+      "to": "LEMD",
+      "off_blocks": null
+    }
+  ],
+  "people": []
+}
+```
+
+Expected result: the matched entry's `off_blocks` clears to empty, exactly like the normal sync upsert — only that field's own edit timestamp is bumped, every other stored field (e.g. `on_blocks`) is untouched. On the API this syncs to other devices like any edit, and only ever lands on an entry this same partner imported. In the app, the deeplink's import preview shows the change as `"07:05" → "(empty)"` before anything is written.
+
+**Deeplink**
+
+```
+jetlog://import?data=%7B%22entries%22%3A%5B%7B%22type%22%3A%22flight%22%2C%22date%22%3A%222026-08-16%22%2C%22flight_number%22%3A%22KL1601%22%2C%22from%22%3A%22EHAM%22%2C%22to%22%3A%22LEMD%22%2C%22off_blocks%22%3Anull%7D%5D%2C%22people%22%3A%5B%5D%7D
+```
+
+**API**
+
+```sh
+curl -X POST https://jetlog.app/external/v1/import \
+  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"entries":[{"type":"flight","date":"2026-08-16","flight_number":"KL1601","from":"EHAM","to":"LEMD","off_blocks":null}],"people":[]}'
+```
+
 ### Deleting a flight you imported (deeplink-safe)
 
 Only ever affects an entry this caller created. Send `"is_deleted": false` with the same identity to restore it.
