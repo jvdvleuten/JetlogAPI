@@ -1,12 +1,44 @@
 # Jetlog Import Guide
 
+## Quick start
+
 Two ways to bring flights into Jetlog:
 - **Deeplink (jetlog://import?data=…)** – for end users/scripts that can open the Jetlog app.
 - **External Partner API (https://jetlog.app/external/v1/import)** – HTTP endpoint with dual-key auth (`Bearer <user_key>:<partner_key>`).
 
-The **JSON payload is the same** for both flows (see “Payload schema” below).
+The **JSON payload is the same** for both flows (see "Payload schema" below).
 
-Ready-to-use payloads, encoded deeplinks and curl calls: **[EXAMPLES.md](EXAMPLES.md)**.
+**Auth, in one line:** External Partner API calls send `Authorization: Bearer <user_key>:<partner_key>` — `user_key` is server-generated when a user enables the external source, `partner_key` is issued per integration. Full details are under [External Partner API](#external-partner-api) in the Reference part below.
+
+**The minimal payload** — identity for the deeplink, route for the API, nothing else required:
+
+```json
+{
+  "entries": [
+    {
+      "type": "flight",
+      "date": "2026-08-14",
+      "flight_number": "KL1023",
+      "from": "EHAM",
+      "to": "EGLL"
+    }
+  ],
+  "people": []
+}
+```
+
+```sh
+curl -X POST https://jetlog.app/external/v1/import \
+  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"entries":[{"type":"flight","date":"2026-08-14","flight_number":"KL1023","from":"EHAM","to":"EGLL"}],"people":[]}'
+```
+
+[▶ Open this example in Jetlog](https://jetlog.app/import?data=%7B%22entries%22%3A%5B%7B%22type%22%3A%22flight%22%2C%22date%22%3A%222026-08-14%22%2C%22flight_number%22%3A%22KL1023%22%2C%22from%22%3A%22EHAM%22%2C%22to%22%3A%22EGLL%22%7D%5D%2C%22people%22%3A%5B%5D%7D)
+
+*Opening that link requires the Jetlog app; without it you land on an explanation page instead of a silent failure. Every other `jetlog.app/import` link in this repo and in EXAMPLES.md behaves the same way.*
+
+Ready-to-use payloads for every field, crew, clearing a value, deleting a flight, day/night landings, and IATA conversion — each with its own clickable link and curl call: **[EXAMPLES.md](EXAMPLES.md)**.
 
 Every example in this repo is validated by `python3 scripts/validate_examples.py`, and both flows' payloads are asserted against the real importers by tests in the backend and iOS repos — so an example that stops working fails a build rather than misleading you.
 
@@ -21,7 +53,7 @@ Top-level keys:
 
 **Flight Entry (`entries`):**
 | Field                  | Type   | Required | Description                               |
-| :--------------------- | :----- | :------- | :---------------------------------------- |
+| :--------------------- | :----- | :------- | :----------------------------------------- |
 | `type`                 | String | No       | Defaults to `"flight"` — a missing key or an explicit `null` both count as the default. Only `"flight"` is supported; any other value is not imported (see each flow's Behavior section for how that's reported). |
 | `date`                 | String | Yes      | `YYYY-MM-DD`.                             |
 | `flight_number`        | String | No       | Flight number.                            |
@@ -42,7 +74,7 @@ Top-level keys:
 
 **Flight `people` object:**
 | Field    | Type   | Required | Description                                                          |
-| :------- | :----- | :------- | :------------------------------------------------------------------- |
+| :------- | :----- | :------- | :--------------------------------------------------------------------- |
 | `ref_id` | String | Yes      | References `people.ref_id`, or `"SELF"` for yourself.               |
 | `role`   | String | Yes      | Role on this flight (e.g. PIC, CP, Purser).                         |
 
@@ -58,9 +90,13 @@ Top-level keys:
 **Notes on people**
 - You can use `SELF` in a flight without adding a top-level person for yourself.
 - `ref_id` is payload-local: it links `entries[*].people[*].ref_id` to `people[*].ref_id` and is not stored.
-- Whether an existing person can be modified by the payload differs per flow — for the External Partner API, see "People" under its Behavior section below.
+- Whether an existing person can be modified by the payload differs per flow — for the External Partner API, see "People" under its Behavior section in Reference below.
 
-**What a JSON `null` means depends on the field**
+## Reference
+
+The deep semantics for both flows — read this when a payload doesn't behave the way you expected. Everything above is what you need for the common case.
+
+### What a JSON `null` means depends on the field
 
 Both flows follow the same two-tier rule for an explicit `null` on an entry
 field:
@@ -156,7 +192,7 @@ Remarks are the pilot's own text, so an import can add them but not quietly repl
 
 **Where the two flows differ**
 
-`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), non-`"flight"` rows, the `update_flight_data` inference, and the null-clears-a-value-field rule (see the field table and "What a JSON `null` means" above) are all handled the same way now (optional/defaulted/tolerated/clearable on both). What's left genuinely differs — check these if you support both:
+`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), non-`"flight"` rows, the `update_flight_data` inference, and the null-clears-a-value-field rule (see the field table and ["What a JSON `null` means"](#what-a-json-null-means-depends-on-the-field) above) are all handled the same way now (optional/defaulted/tolerated/clearable on both). What's left genuinely differs — check these if you support both:
 
 | | Deeplink | External Partner API |
 | :-- | :-- | :-- |
@@ -166,7 +202,7 @@ Remarks are the pilot's own text, so an import can add them but not quietly repl
 | Unresolvable `people[].ref_id` | Kept for the import review to resolve | Entry still imports without that crew member; reported in the response's `warnings` array |
 | Matching an existing person | May update their `default_role`, but only when the payload actually supplies one — omitting it never wipes an existing role; also matches on a single name | Never modifies an existing person; matches `employee_number` then first+last only |
 
-## Deeplink Import
+### Deeplink Import
 
 **URL format**
 ```
@@ -177,7 +213,10 @@ Steps:
 2) URL-encode the JSON string.  
 3) Open `jetlog://import?data=<encoded>` (click or `open "jetlog://..."`).  
 
+The same `?data=` contract also works behind `https://jetlog.app/import?data=<encoded>` — that's the form you put in a web page or README, since a custom scheme isn't clickable there; the app parses both identically. See "Building a deeplink yourself" in EXAMPLES.md.
+
 **JSON example**
+
 ```json
 {
   "entries": [
@@ -208,6 +247,10 @@ Steps:
 }
 ```
 
+[▶ Open this example in Jetlog](https://jetlog.app/import?data=%7B%22entries%22%3A%5B%7B%22type%22%3A%22flight%22%2C%22date%22%3A%222025-12-10%22%2C%22flight_number%22%3A%22KL1023%22%2C%22scheduled_off_blocks%22%3A%2214%3A00%22%2C%22registration%22%3A%22PH-BXD%22%2C%22from%22%3A%22EHAM%22%2C%22to%22%3A%22EGLL%22%2C%22off_blocks%22%3A%2214%3A08%22%2C%22airborne%22%3A%2214%3A28%22%2C%22touchdown%22%3A%2214%3A55%22%2C%22on_blocks%22%3A%2215%3A05%22%2C%22people%22%3A%5B%7B%22ref_id%22%3A%22SELF%22%2C%22role%22%3A%22PIC%22%7D%2C%7B%22ref_id%22%3A%22REF2%22%2C%22role%22%3A%22FO%22%7D%2C%7B%22ref_id%22%3A%22REF3%22%2C%22role%22%3A%22Purser%22%7D%5D%2C%22takeoffs_and_landings%22%3A%7B%22takeoffs%22%3A1%2C%22landings%22%3A1%7D%7D%5D%2C%22people%22%3A%5B%7B%22ref_id%22%3A%22REF2%22%2C%22first_name%22%3A%22Fantas%22%2C%22last_name%22%3A%22Tico%22%2C%22default_role%22%3A%22FO%22%2C%22employee_number%22%3A%2200923%22%7D%2C%7B%22ref_id%22%3A%22REF3%22%2C%22first_name%22%3A%22Sally%22%2C%22last_name%22%3A%22Skyway%22%2C%22default_role%22%3A%22Purser%22%2C%22employee_number%22%3A%2201556%22%7D%5D%7D)
+
+This same payload also imports unmodified through the External Partner API — the schema really is shared, not just similar.
+
 **Important notes**
 - URL length: split if payloads are huge.
 - `type` may be omitted (or sent as `null`) — it defaults to `"flight"`. Any other value, or a structurally malformed entry/person (bad types, a missing required key), is not silently dropped: it shows up as a per-row error in the import review instead, and the rest of the payload still imports.
@@ -217,7 +260,7 @@ Steps:
 - Opening a link never writes anything on its own — the app shows an import preview the user confirms.
 - A row that deletes an existing entry (`is_deleted: true`) is called out in that preview and **starts unselected**: the user has to opt in before it is applied. Don't rely on a link alone to remove a flight.
 
-## External Partner API
+### External Partner API
 
 **Authentication**
 - Header: `Authorization: Bearer <user_key>:<partner_key>`
@@ -244,17 +287,38 @@ Authorization: Bearer <user_key>:<partner_key>
   - Two `ref_id`s resolving to the same person collapse to one crew assignment on an entry (the first `role` wins). A `ref_id` that resolves to nothing does not fail the entry: it imports without that crew member, and the response's `warnings` array gets an entry for it (see below).
   - Crew is merged, never replaced: omitting `people` — or sending `[]` — on a re-import keeps the existing crew. There is no way to remove crew from an entry via this API.
 - Success: `{"data": "OK", "skipped": [...]}`, plus an additive `"warnings"` array when there's something to report (omitted entirely otherwise). Errors return `{"error": "<message>"}` where `<message>` is always one of a short, stable set of strings (e.g. `"invalid_user"`, `"update_failed"`, `"import_failed"`) — never a raw changeset, stack trace, or internal id.
-- Skipped reasons:
-  - `"duplicate"`: entry matches an existing entry from a different source (fields: `date`, `flight_number`, `from`, `to`, `reason`).
-  - `"missing_route"`: entry lacks `from` and `to` (fields: `date`, `flight_number`, `reason`).
-  - `"unsupported_type"`: entry `type` is not `"flight"` (fields: `date`, `flight_number`, `type`, `reason`). Nothing is stored for it.
-  - `"duplicate_in_payload"`: this same `(date, flight_number, from, to)` identity appears more than once in this payload; the **last** occurrence is imported and the earlier one(s) are reported this way (fields: `date`, `flight_number`, `from`, `to`, `reason`).
-  - `"deleted"`: a same-source entry with this identity exists but is soft-deleted, and this row doesn't say anything about `is_deleted` (fields: `date`, `flight_number`, `from`, `to`, `reason`). Send `is_deleted: false` to restore it instead.
-  - `"invalid_field"`: the row failed the same field-level validation a direct write would (an unparsable time, an incomplete `takeoffs_and_landings` pair, ...) — only this row is skipped (fields: `date`, `flight_number`, `reason`, `fields` — an array of the failing field names). A field inside an embedded object like `takeoffs_and_landings` is named with a dot, e.g. `"takeoffs_and_landings.landings"` for a missing landings count — not just `"landings"`.
-- Warnings: an entry that imports but references a `people[].ref_id` that doesn't resolve to a known person adds one entry to the top-level `"warnings"` array: `{"date", "flight_number", "ref_id", "reason": "unresolved_person_ref"}`. The flight itself still imports, just without that crew member.
-- Rows are independent: a skipped, deleted, or invalid row never prevents the rest of the payload from importing. A request that can't be processed at all (bad auth, unparsable JSON, a batch-level failure) returns a non-200 `{"error": "..."}`. This does **not** always mean nothing was written: `people` and `entries` are committed in separate transactions, people first — if the batch fails while processing `entries`, any `people` rows that were newly created from this same payload are already persisted even though the request as a whole reports non-200. It's safe to resend the same payload afterward: those people will simply match on the retry instead of being duplicated.
+
+#### Skip reasons and warnings — the full list
+
+- `"duplicate"`: entry matches an existing entry from a different source (fields: `date`, `flight_number`, `from`, `to`, `reason`).
+- `"missing_route"`: entry lacks `from` and `to` (fields: `date`, `flight_number`, `reason`).
+- `"unsupported_type"`: entry `type` is not `"flight"` (fields: `date`, `flight_number`, `type`, `reason`). Nothing is stored for it.
+- `"duplicate_in_payload"`: this same `(date, flight_number, from, to)` identity appears more than once in this payload; the **last** occurrence is imported and the earlier one(s) are reported this way (fields: `date`, `flight_number`, `from`, `to`, `reason`).
+- `"deleted"`: a same-source entry with this identity exists but is soft-deleted, and this row doesn't say anything about `is_deleted` (fields: `date`, `flight_number`, `from`, `to`, `reason`). Send `is_deleted: false` to restore it instead.
+- `"invalid_field"`: the row failed the same field-level validation a direct write would (an unparsable time, an incomplete `takeoffs_and_landings` pair, ...) — only this row is skipped (fields: `date`, `flight_number`, `reason`, `fields` — an array of the failing field names). A field inside an embedded object like `takeoffs_and_landings` is named with a dot, e.g. `"takeoffs_and_landings.landings"` for a missing landings count — not just `"landings"`.
+
+Warnings: an entry that imports but references a `people[].ref_id` that doesn't resolve to a known person adds one entry to the top-level `"warnings"` array: `{"date", "flight_number", "ref_id", "reason": "unresolved_person_ref"}`. The flight itself still imports, just without that crew member.
+
+Rows are independent: a skipped, deleted, or invalid row never prevents the rest of the payload from importing. A request that can't be processed at all (bad auth, unparsable JSON, a batch-level failure) returns a non-200 `{"error": "..."}`. This does **not** always mean nothing was written: `people` and `entries` are committed in separate transactions, people first — if the batch fails while processing `entries`, any `people` rows that were newly created from this same payload are already persisted even though the request as a whole reports non-200. It's safe to resend the same payload afterward: those people will simply match on the retry instead of being duplicated.
 
 **Example request**
+
+```json
+{
+  "entries": [
+    {
+      "type": "flight",
+      "date": "2025-12-10",
+      "flight_number": "KL1023",
+      "from": "EHAM",
+      "to": "EGLL",
+      "people": [{"ref_id": "SELF", "role": "PIC"}]
+    }
+  ],
+  "people": []
+}
+```
+
 ```sh
 curl -X POST https://jetlog.app/external/v1/import \
   -H "Authorization: Bearer USER_KEY:PARTNER_KEY" \
@@ -274,34 +338,16 @@ curl -X POST https://jetlog.app/external/v1/import \
   }'
 ```
 
+This payload is also deeplink-valid — clicking it opens the same import in the app, confirming the schema is shared in both directions:
+
+[▶ Open this example in Jetlog](https://jetlog.app/import?data=%7B%22entries%22%3A%5B%7B%22type%22%3A%22flight%22%2C%22date%22%3A%222025-12-10%22%2C%22flight_number%22%3A%22KL1023%22%2C%22from%22%3A%22EHAM%22%2C%22to%22%3A%22EGLL%22%2C%22people%22%3A%5B%7B%22ref_id%22%3A%22SELF%22%2C%22role%22%3A%22PIC%22%7D%5D%7D%5D%2C%22people%22%3A%5B%5D%7D)
+
 **Example response**
 ```json
 {"data": "OK", "skipped": []}
 ```
 
-With skipped entries:
-```json
-{
-  "data": "OK",
-  "skipped": [
-    {"date": "2025-12-10", "flight_number": "KL1023", "from": "EHAM", "to": "EGLL", "reason": "duplicate"},
-    {"date": "2025-12-11", "flight_number": "KL2000", "reason": "missing_route"},
-    {"date": "2025-12-12", "flight_number": "KL2101", "reason": "invalid_field", "fields": ["off_blocks"]},
-    {"date": "2025-12-13", "flight_number": "KL2201", "reason": "invalid_field", "fields": ["takeoffs_and_landings.landings"]}
-  ]
-}
-```
-
-With a warning (the entry itself still imports, just without the crew member that didn't resolve):
-```json
-{
-  "data": "OK",
-  "skipped": [],
-  "warnings": [
-    {"date": "2025-12-13", "flight_number": "KL2200", "ref_id": "REF9", "reason": "unresolved_person_ref"}
-  ]
-}
-```
+Full worked examples of every `skipped`/`warnings` shape (all six skip reasons, plus the warnings array) live in EXAMPLES.md's ["Reading the API response"](EXAMPLES.md#reading-the-api-response) — every reason is asserted by the backend test suite.
 
 ## Tips
 - Keep `ref_id` unique in `people`; reuse in `entries[*].people`.
