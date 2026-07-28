@@ -18,7 +18,7 @@ One rule catches most mistakes:
 
 Everything else — the top-level `people` key, an entry's `type`, and the
 takeoffs/landings shape — is optional/defaulted/tolerated the same way by both
-flows now; see the README's schema table for specifics.
+flows; see the README's schema table for specifics.
 
 Times are `HH:MM` zulu relative to `date`. Dates are strictly `YYYY-MM-DD` —
 `01-03-2026` is rejected by both flows.
@@ -227,7 +227,7 @@ curl -X POST https://jetlog.app/external/v1/import \
 
 ### Clearing a value you already imported (deeplink-safe)
 
-Re-send the same identity with a field set to explicit `null` to clear it — the one case where `null` isn't the same as leaving the key out (see the README's ["What a JSON `null` means depends on the field"](README.md#what-a-json-null-means-depends-on-the-field)). Only the 6 clearable value fields work this way: `off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`, `takeoffs_and_landings`. `scheduled_off_blocks`/`scheduled_on_blocks` are not among them — a `null` there is treated as omitted, because the flight-data feed refills a nil scheduled column itself and neither field has a per-field timestamp for a clear to hold against.
+Re-send the same identity with a field set to explicit `null` to clear it — the one case where `null` isn't the same as leaving the key out (see the README's ["What a JSON `null` means depends on the field"](README.md#what-a-json-null-means-depends-on-the-field)). Only the 6 clearable value fields work this way: `off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`, `takeoffs_and_landings`. `scheduled_off_blocks`/`scheduled_on_blocks` are not among them — a `null` there is treated as omitted; scheduled times are managed by Jetlog's flight tracking, so they can't be cleared by an import.
 
 Given an entry already imported with `"off_blocks": "07:05"`, this clears it:
 
@@ -247,7 +247,7 @@ Given an entry already imported with `"off_blocks": "07:05"`, this clears it:
 }
 ```
 
-Expected result: the matched entry's `off_blocks` clears to empty, exactly like the normal sync upsert — only that field's own edit timestamp is bumped, every other stored field (e.g. `on_blocks`) is untouched. On the API this syncs to other devices like any edit, and only ever lands on an entry this same partner imported. In the app, the deeplink's import preview shows the change as `"07:05" → "(empty)"` before anything is written.
+Expected result: the matched entry's `off_blocks` clears to empty; every other stored field (e.g. `on_blocks`) is untouched. On the API this syncs to other devices like any edit, and only ever lands on an entry this same partner imported. In the app, the deeplink's import preview shows the change as `"07:05" → "(empty)"` before anything is written.
 
 ```sh
 curl -X POST https://jetlog.app/external/v1/import \
@@ -407,7 +407,7 @@ Rows are independent: a skipped row does not stop the rest of the payload from
 importing, so always read `skipped` (and `warnings`) rather than assuming a 200
 means every row landed exactly as sent. A malformed request that cannot be
 processed at all returns a non-200 with `{"error": "…"}` — always a short,
-stable string, never a raw changeset or internal id. That non-200 does **not**
+stable string, never raw internal error details or an internal id. That non-200 does **not**
 guarantee nothing was written, though: `people` and `entries` are committed in
 separate transactions, people first, so a batch that later fails while
 processing `entries` can still leave newly-created `people` rows behind. It's
@@ -434,9 +434,9 @@ The app parses `?data=` the same way regardless of which one opened it.
 - Every consumer decodes it **exactly once**, percent-only. A literal `%` or
   `+` in a field's text (e.g. `"remarks": "climb 100% N1 a+b"`) is safe and
   round-trips exactly: percent-decoding never treats `+` as a space (that's
-  an `x-www-form-urlencoded` rule, not a URL-encoding one, and nothing in
-  this flow applies it), and a literal `%` only survives because it was
-  itself percent-encoded to `%25` going in.
+  a form-encoding rule, not a URL-encoding one, and nothing in this flow
+  applies it), and a literal `%` only survives because it was itself
+  percent-encoded to `%25` going in.
 - If the URL ends up with more than one `data=` parameter, the **first** one
   wins; any later `data=` is ignored.
 

@@ -57,9 +57,9 @@ Top-level keys:
 | `type`                 | String | No       | Defaults to `"flight"` — a missing key or an explicit `null` both count as the default. Only `"flight"` is supported; any other value is not imported (see each flow's Behavior section for how that's reported). |
 | `date`                 | String | Yes      | `YYYY-MM-DD`.                             |
 | `flight_number`        | String | No       | Flight number.                            |
-| `scheduled_off_blocks` | String | No       | Planned off-blocks, `HH:MM` zulu. `null` is treated as omitted, same as leaving the key out — this is **not** one of the clearable fields, because the flight-data feed refills a nil scheduled column itself (backend enrichment does it in the same request) and the field has no per-field timestamp, so a "clear" can't stick. |
+| `scheduled_off_blocks` | String | No       | Planned off-blocks, `HH:MM` zulu. `null` is treated as omitted; scheduled times are managed by Jetlog's flight tracking, so they can't be cleared by an import. |
 | `scheduled_on_blocks`  | String | No       | Planned on-blocks, `HH:MM` zulu. Same as `scheduled_off_blocks` — `null` is treated as omitted, not a clear. |
-| `registration`         | String | No       | Aircraft registration. Normalised to uppercase with separators stripped (`PH-BXD` → `PHBXD`). **Clearable** — an explicit `null` clears the stored (manual) registration; it does not touch the separately-tracked system-sourced value (`registration_system`), so while `update_flight_data` is `true` the system-sourced tail can still display after the clear. A partner-created entry seeds `registration_system` at create. |
+| `registration`         | String | No       | Aircraft registration. Normalised to uppercase with separators stripped (`PH-BXD` → `PHBXD`). **Clearable** — an explicit `null` clears the registration you sent. While the entry has auto-update on, Jetlog may still display the aircraft it tracked for that flight. |
 | `from`                 | String | No       | ICAO departure. A 3-letter IATA code is converted when recognised; an unrecognised one is stored as given. |
 | `to`                   | String | No       | ICAO arrival. Same IATA handling as `from`. |
 | `off_blocks`           | String | No       | `HH:MM` zulu. **Clearable** — an explicit `null` clears a stored value on a match; omitting the key leaves it untouched. |
@@ -70,7 +70,7 @@ Top-level keys:
 | `takeoffs_and_landings`| Object | No       | `{ "takeoffs": n, "landings": n }`, or the day/night split `{ "takeoffs_day": n, "takeoffs_night": n, "landings_day": n, "landings_night": n }` — send **both** counts of whichever shape you use. Both flows accept either shape. **Clearable** — an explicit `null` clears it: the entry reads as 0 takeoffs / 0 landings, untracked. |
 | `remarks`              | String | No       | Free text, max 1000 characters. **Never overwrites remarks the entry already has**, and `null` is always treated as omitted (never a wipe) — see the per-flow rules below. |
 | `is_deleted`           | Bool   | No       | Soft-delete an entry this caller created. `false` restores one. `null` is treated as omitted — deletion state only ever changes on an explicit `true`/`false`. |
-| `update_flight_data`   | Bool   | No       | Auto-update the entry from Jetlog's flight data sources (live airline/airport feeds — unrelated to this API). An explicit value always applies; `null` is treated as omitted, falling through to inference. On **create**, inference is `false` if any actual time (`off_blocks`/`airborne`/`touchdown`/`on_blocks`) is supplied with a real, non-`null` value — so your reported times are what's shown — else `true`; a `null` on one of those fields is a clear, not a supplied time, and never triggers this. On a **re-import/merge** of an existing entry, the inferred switch to `false` happens only when the import actually brings a new or changed non-`null` actual time; a `null` (a clear) never counts as "differing", so a row that only clears a time leaves the stored setting untouched, and a byte-identical re-import never flips it either. |
+| `update_flight_data`   | Bool   | No       | Auto-update the entry from Jetlog's flight data sources (live airline/airport feeds — unrelated to this API). An explicit value always applies; `null` is treated as omitted, falling through to inference. On **create**, inference is `false` if any actual time (`off_blocks`/`airborne`/`touchdown`/`on_blocks`) is supplied with a real value — so your reported times are what's shown — else `true`; a `null` on one of those fields is a clear, not a supplied time, and never triggers this. On a **re-import/merge** of an existing entry, the inferred switch to `false` happens only when the import actually brings a new or changed real time; a `null` (a clear) never counts as a change, so a row that only clears a time leaves the stored setting untouched, and an identical re-import never flips it either. |
 
 **Flight `people` object:**
 | Field    | Type   | Required | Description                                                          |
@@ -104,56 +104,45 @@ field:
 **(a) Clearable value fields — `null` clears, omitting leaves untouched.**
 `off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`, and
 `takeoffs_and_landings` — six fields — treat an explicit `null` on a
-matching existing entry exactly like the normal sync upsert's clear: the
-value is removed. Leaving the key out of the payload entirely, by contrast,
-leaves whatever is already stored untouched — only a *literal* `null`
-clears. Worked example: to blank out an `off_blocks` you imported earlier,
-re-send the same identity with `"off_blocks": null`; the entry's other
-fields (e.g. `airborne`) are untouched. On the External Partner API this
-flows through the normal changeset like any other edit — each of these six
-fields has its own per-field timestamp, which is bumped to "now", so the
-clear syncs to other devices exactly like a real edit — and, since the amend
-path only ever matches the caller's own previously-imported rows, a clear
-can never land on an entry another source or the pilot's own app wrote.
-`registration` is a partial exception in what it displays afterward: the
-clear only ever touches the manual `registration` column, never the
-separately-tracked `registration_system` (a partner-created entry seeds that
-column at create), so while `update_flight_data` is `true` the system-sourced
-tail can still be what's shown right after the clear.
+matching existing entry as a clear: the value is removed. Leaving the key
+out of the payload entirely, by contrast, leaves whatever is already stored
+untouched — only a *literal* `null` clears. Worked example: to blank out an
+`off_blocks` you imported earlier, re-send the same identity with
+`"off_blocks": null`; the entry's other fields (e.g. `airborne`) are
+untouched. On the External Partner API, a clear is applied like an edit made
+in the app and syncs to the pilot's devices; it only ever affects entries
+this key created — a clear can never land on an entry another source or the
+pilot's own app wrote. `registration` is a partial exception in what it
+displays afterward: the clear only ever removes the registration you sent —
+while the entry has auto-update on, Jetlog may still display the aircraft it
+tracked for that flight, right after the clear.
 
-**(b) These fields keep the old rule: `null` is always treated as "key
-omitted", never a clear** — each for its own reason:
-- `type` — `NOT NULL` with no meaningful clear; a missing key or an explicit
-  `null` both just mean the default, `"flight"`.
-- `is_deleted` — `NOT NULL`; deletion state only ever changes on an explicit
-  `true`/`false`, so a same-source soft-deleted match with `null` (or no
-  mention at all) still reports `"deleted"` rather than being resurrected —
-  see the skip reasons below.
-- `update_flight_data` — `NOT NULL` with a schema default; "cleared" doesn't
-  mean anything against the inference, so `null` just falls through to it.
-- `people` — crew is merge-only by contract; a `null` must never wipe the
-  crew list.
-- `remarks` — write-once/consent semantics own this field on both flows; a
-  `null` must never be a remarks wipe (and clearing a blank note would be a
-  no-op anyway).
-- `scheduled_off_blocks` / `scheduled_on_blocks` — the flight-data feed
-  refills a nil scheduled column itself (backend enrichment does this in the
-  same request), and neither field carries a per-field timestamp, so a
-  client-issued clear has nothing to hold the line against the feed and
-  would not stick. These moved out of the clearable set for exactly that
-  reason — a "clear" here can't be honored, so it isn't promised.
+**(b) For these fields, `null` is treated as if the key were omitted —
+never a clear** — each for its own reason:
+- `type` — there is nothing to clear — it just means the default,
+  `"flight"`.
+- `is_deleted` — deletion state only changes on an explicit `true`/`false`,
+  so a same-source soft-deleted match with `null` (or no mention at all)
+  still reports `"deleted"` rather than being resurrected — see the skip
+  reasons below.
+- `update_flight_data` — `null` just falls through to the inference below.
+- `people` — crew is merge-only — it can be added to, never wiped.
+- `remarks` — remarks are never removed by an import — see the remarks
+  rules below.
+- `scheduled_off_blocks` / `scheduled_on_blocks` — scheduled times are
+  managed by Jetlog's flight tracking, so they can't be cleared by an
+  import.
 
 **(c) Identity fields can't be cleared — by construction, not by
 special-casing.** On the External Partner API, `from`/`to` sent as `null`
 simply fails the `"missing_route"` requirement, so nothing is written — there
 is nothing to clear. A `null` `date` or `flight_number` just participates in
-matching as `nil`, and under SQL `NULL` semantics that can never *find* a row
-that already has a real value, so a "clear" via either is unreachable. On the
+matching as empty, and an empty value can never match a row that already has
+a real value stored, so a "clear" via either is unreachable. On the
 deeplink, identity is `flight_number` **or** `registration`: if `registration`
 is nulled but `flight_number` still identifies the row, the clear still
 applies to the matched entry (`registration` is one of the clearable value
-fields above); if both are `nil`, it's the existing per-row missing-identity
-error, same as before.
+fields above); if both are null, it's the per-row missing-identity error.
 
 **(d) `""` is never a clear — don't send it.** Only a *literal* JSON `null`
 clears (the (a) fields) or falls through to a default/inference (the (b)
@@ -192,7 +181,7 @@ Remarks are the pilot's own text, so an import can add them but not quietly repl
 
 **Where the two flows differ**
 
-`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), non-`"flight"` rows, the `update_flight_data` inference, and the null-clears-a-value-field rule (see the field table and ["What a JSON `null` means"](#what-a-json-null-means-depends-on-the-field) above) are all handled the same way now (optional/defaulted/tolerated/clearable on both). What's left genuinely differs — check these if you support both:
+`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), non-`"flight"` rows, the `update_flight_data` inference, and the null-clears-a-value-field rule (see the field table and ["What a JSON `null` means"](#what-a-json-null-means-depends-on-the-field) above) behave the same way on both flows (optional/defaulted/tolerated/clearable). What's left genuinely differs — check these if you support both:
 
 | | Deeplink | External Partner API |
 | :-- | :-- | :-- |
@@ -249,7 +238,7 @@ The same `?data=` contract also works behind `https://jetlog.app/import?data=<en
 
 [▶ Open this example in Jetlog](https://jetlog.app/import?data=%7B%22entries%22%3A%5B%7B%22type%22%3A%22flight%22%2C%22date%22%3A%222025-12-10%22%2C%22flight_number%22%3A%22KL1023%22%2C%22scheduled_off_blocks%22%3A%2214%3A00%22%2C%22registration%22%3A%22PH-BXD%22%2C%22from%22%3A%22EHAM%22%2C%22to%22%3A%22EGLL%22%2C%22off_blocks%22%3A%2214%3A08%22%2C%22airborne%22%3A%2214%3A28%22%2C%22touchdown%22%3A%2214%3A55%22%2C%22on_blocks%22%3A%2215%3A05%22%2C%22people%22%3A%5B%7B%22ref_id%22%3A%22SELF%22%2C%22role%22%3A%22PIC%22%7D%2C%7B%22ref_id%22%3A%22REF2%22%2C%22role%22%3A%22FO%22%7D%2C%7B%22ref_id%22%3A%22REF3%22%2C%22role%22%3A%22Purser%22%7D%5D%2C%22takeoffs_and_landings%22%3A%7B%22takeoffs%22%3A1%2C%22landings%22%3A1%7D%7D%5D%2C%22people%22%3A%5B%7B%22ref_id%22%3A%22REF2%22%2C%22first_name%22%3A%22Fantas%22%2C%22last_name%22%3A%22Tico%22%2C%22default_role%22%3A%22FO%22%2C%22employee_number%22%3A%2200923%22%7D%2C%7B%22ref_id%22%3A%22REF3%22%2C%22first_name%22%3A%22Sally%22%2C%22last_name%22%3A%22Skyway%22%2C%22default_role%22%3A%22Purser%22%2C%22employee_number%22%3A%2201556%22%7D%5D%7D)
 
-This same payload also imports unmodified through the External Partner API — the schema really is shared, not just similar.
+This same payload also imports unmodified through the External Partner API, since both flows share the same schema.
 
 **Important notes**
 - URL length: split if payloads are huge.
@@ -278,7 +267,7 @@ Authorization: Bearer <user_key>:<partner_key>
 - Entry match: per user by `date + flight_number + from + to`; updates or creates accordingly.
 - Required fields: `from` and `to` must be provided for the External Partner API.
 - Soft-delete: `is_deleted: true` deletes only the caller's own external entries. Sending `is_deleted: false` for the same flight restores one you previously deleted.
-- Re-importing a flight you've soft-deleted: if the row doesn't mention `is_deleted` at all, it is skipped (reason `"deleted"`) rather than silently un-deleting a row this caller can no longer see. Send `is_deleted: false` to actually restore it.
+- Re-importing a flight you've soft-deleted: if the row doesn't mention `is_deleted` at all, it is skipped (reason `"deleted"`) rather than silently un-deleting a row this caller can't see. Send `is_deleted: false` to actually restore it.
 - Entries from another source (the app itself, a roster import, another partner) are never modified — they come back as `"duplicate"` in `skipped`. This is about *live* rows only: if that other source's entry is itself soft-deleted, its identity is free — importing the same flight creates a new, live row alongside the deleted one rather than resurrecting or merging into it.
 - People:
   - A submitted person is matched against the people the user already has: first by `employee_number`, otherwise by `first_name` + `last_name` (ignoring case and surrounding whitespace).
@@ -286,7 +275,7 @@ Authorization: Bearer <user_key>:<partner_key>
   - `SELF` = the authenticated user. A submitted person that matches the user's own profile resolves to it instead of creating a duplicate contact.
   - Two `ref_id`s resolving to the same person collapse to one crew assignment on an entry (the first `role` wins). A `ref_id` that resolves to nothing does not fail the entry: it imports without that crew member, and the response's `warnings` array gets an entry for it (see below).
   - Crew is merged, never replaced: omitting `people` — or sending `[]` — on a re-import keeps the existing crew. There is no way to remove crew from an entry via this API.
-- Success: `{"data": "OK", "skipped": [...]}`, plus an additive `"warnings"` array when there's something to report (omitted entirely otherwise). Errors return `{"error": "<message>"}` where `<message>` is always one of a short, stable set of strings (e.g. `"invalid_user"`, `"update_failed"`, `"import_failed"`) — never a raw changeset, stack trace, or internal id.
+- Success: `{"data": "OK", "skipped": [...]}`, plus an additive `"warnings"` array when there's something to report (omitted entirely otherwise). Errors return `{"error": "<message>"}` where `<message>` is always one of a short, stable set of strings (e.g. `"invalid_user"`, `"update_failed"`, `"import_failed"`) — never raw internal error details, a stack trace, or an internal id.
 
 #### Skip reasons and warnings — the full list
 
