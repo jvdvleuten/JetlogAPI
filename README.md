@@ -62,6 +62,8 @@ Top-level keys:
 | `registration`         | String | No       | Aircraft registration. Normalised to uppercase with separators stripped (`PH-BXD` → `PHBXD`). **Clearable** — an explicit `null` clears the registration you sent. While the entry has auto-update on, Jetlog may still display the aircraft it tracked for that flight. |
 | `from`                 | String | No       | ICAO departure. A 3-letter IATA code is converted when recognised; an unrecognised one is stored as given. |
 | `to`                   | String | No       | ICAO arrival. Same IATA handling as `from`. |
+| `actual_from`          | String | No       | The airport actually departed from, when it differs from the plan — same IATA→ICAO conversion as `from`. **Clearable** — an explicit `null` clears a stored value on a match; omitting the key leaves it untouched. Only consulted while the entry's `update_flight_data` is `false` — send that explicitly, or supply an actual time (`off_blocks`/`airborne`/`touchdown`/`on_blocks`, which infers it), or the value is stored but not shown anywhere. |
+| `actual_to`            | String | No       | The airport actually arrived at, when it differs from the plan — a diversion. Same rules as `actual_from`. |
 | `off_blocks`           | String | No       | `HH:MM` zulu. **Clearable** — an explicit `null` clears a stored value on a match; omitting the key leaves it untouched. |
 | `airborne`             | String | No       | `HH:MM` zulu. **Clearable**, same as `off_blocks`. |
 | `touchdown`            | String | No       | `HH:MM` zulu. **Clearable**, same as `off_blocks`. |
@@ -102,20 +104,24 @@ Both flows follow the same two-tier rule for an explicit `null` on an entry
 field:
 
 **(a) Clearable value fields — `null` clears, omitting leaves untouched.**
-`off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`, and
-`takeoffs_and_landings` — six fields — treat an explicit `null` on a
-matching existing entry as a clear: the value is removed. Leaving the key
-out of the payload entirely, by contrast, leaves whatever is already stored
-untouched — only a *literal* `null` clears. Worked example: to blank out an
-`off_blocks` you imported earlier, re-send the same identity with
-`"off_blocks": null`; the entry's other fields (e.g. `airborne`) are
-untouched. On the External Partner API, a clear is applied like an edit made
-in the app and syncs to the pilot's devices; it only ever affects entries
-this key created — a clear can never land on an entry another source or the
-pilot's own app wrote. `registration` is a partial exception in what it
-displays afterward: the clear only ever removes the registration you sent —
-while the entry has auto-update on, Jetlog may still display the aircraft it
-tracked for that flight, right after the clear.
+`off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`,
+`takeoffs_and_landings`, `actual_from`, and `actual_to` — eight fields —
+treat an explicit `null` on a matching existing entry as a clear: the value
+is removed. Leaving the key out of the payload entirely, by contrast, leaves
+whatever is already stored untouched — only a *literal* `null` clears.
+Worked example: to blank out an `off_blocks` you imported earlier, re-send
+the same identity with `"off_blocks": null`; the entry's other fields (e.g.
+`airborne`) are untouched. On the External Partner API, a clear is applied
+like an edit made in the app and syncs to the pilot's devices; it only ever
+affects entries this key created — a clear can never land on an entry
+another source or the pilot's own app wrote. `registration` is a partial
+exception in what it displays afterward: the clear only ever removes the
+registration you sent — while the entry has auto-update on, Jetlog may still
+display the aircraft it tracked for that flight, right after the clear.
+`actual_from`/`actual_to` are clearable on the External Partner API exactly
+like the other six, but **not** on the deeplink: there, an explicit `null`
+on either is treated the same as an omitted key — it never clears. See
+"Where the two flows differ" below.
 
 **(b) For these fields, `null` is treated as if the key were omitted —
 never a clear** — each for its own reason:
@@ -181,11 +187,12 @@ Remarks are the pilot's own text, so an import can add them but not quietly repl
 
 **Where the two flows differ**
 
-`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), non-`"flight"` rows, the `update_flight_data` inference, and the null-clears-a-value-field rule (see the field table and ["What a JSON `null` means"](#what-a-json-null-means-depends-on-the-field) above) behave the same way on both flows (optional/defaulted/tolerated/clearable). What's left genuinely differs — check these if you support both:
+`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), non-`"flight"` rows, and the `update_flight_data` inference behave the same way on both flows (optional/defaulted/tolerated). The null-clears-a-value-field rule (see the field table and ["What a JSON `null` means"](#what-a-json-null-means-depends-on-the-field) above) is shared for six of the eight clearable fields, but not for `actual_from`/`actual_to` — see the table below. What's left genuinely differs — check these if you support both:
 
 | | Deeplink | External Partner API |
 | :-- | :-- | :-- |
 | Entry required fields | `flight_number` **or** `registration` | `from` **and** `to` |
+| `null` on `actual_from`/`actual_to` | Treated as omitted — never a clear | Clears the stored value, like the other six clearable fields |
 | An incomplete `{takeoffs, landings}` pair (only one of the two counts sent) — or an unrecognised explicit `takeoffs_and_landings.type` (anything other than `"auto"`/`"manual"`) | Entry still imports; only the counts are dropped, flagged as a per-row error in the import preview | Whole row skipped — `"invalid_field"`, e.g. `"fields": ["takeoffs_and_landings.landings"]` |
 | `remarks` on a re-import | Replace / Add choice in the preview | Write-once; never overwritten |
 | Unresolvable `people[].ref_id` | Kept for the import review to resolve | Entry still imports without that crew member; reported in the response's `warnings` array |

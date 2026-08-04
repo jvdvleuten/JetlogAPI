@@ -227,7 +227,7 @@ curl -X POST https://jetlog.app/external/v1/import \
 
 ### Clearing a value you already imported (deeplink-safe)
 
-Re-send the same identity with a field set to explicit `null` to clear it — the one case where `null` isn't the same as leaving the key out (see the README's ["What a JSON `null` means depends on the field"](README.md#what-a-json-null-means-depends-on-the-field)). Only the 6 clearable value fields work this way: `off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`, `takeoffs_and_landings`. `scheduled_off_blocks`/`scheduled_on_blocks` are not among them — a `null` there is treated as omitted; scheduled times are managed by Jetlog's flight tracking, so they can't be cleared by an import.
+Re-send the same identity with a field set to explicit `null` to clear it — the one case where `null` isn't the same as leaving the key out (see the README's ["What a JSON `null` means depends on the field"](README.md#what-a-json-null-means-depends-on-the-field)). Eight fields work this way: `off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`, `takeoffs_and_landings`, `actual_from`, `actual_to` — though the last two only clear on the External Partner API; on the deeplink a `null` there is treated as omitted instead, same as `scheduled_off_blocks`/`scheduled_on_blocks`. `scheduled_off_blocks`/`scheduled_on_blocks` themselves are never clearable on either flow — scheduled times are managed by Jetlog's flight tracking, so they can't be cleared by an import.
 
 Given an entry already imported with `"off_blocks": "07:05"`, this clears it:
 
@@ -343,6 +343,39 @@ curl -X POST https://jetlog.app/external/v1/import \
 
 An unrecognised three-letter code is stored verbatim, with no error — check the
 result if you rely on the conversion.
+
+### Recording a diversion (deeplink-safe)
+
+A flight planned to one airport that actually landed at another. `to` stays
+the plan; `actual_to` holds the airport actually flown to, and is only
+consulted while `update_flight_data` is `false` — set explicitly here, since
+no actual time is supplied to infer it.
+
+```json
+{
+  "entries": [
+    {
+      "type": "flight",
+      "date": "2026-08-20",
+      "flight_number": "KL1055",
+      "from": "EHAM",
+      "to": "EGLL",
+      "actual_to": "EGKK",
+      "update_flight_data": false
+    }
+  ],
+  "people": []
+}
+```
+
+```sh
+curl -X POST https://jetlog.app/external/v1/import \
+  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"entries":[{"type":"flight","date":"2026-08-20","flight_number":"KL1055","from":"EHAM","to":"EGLL","actual_to":"EGKK","update_flight_data":false}],"people":[]}'
+```
+
+[▶ Open this example in Jetlog](https://jetlog.app/import?data=%7B%22entries%22%3A%5B%7B%22type%22%3A%22flight%22%2C%22date%22%3A%222026-08-20%22%2C%22flight_number%22%3A%22KL1055%22%2C%22from%22%3A%22EHAM%22%2C%22to%22%3A%22EGLL%22%2C%22actual_to%22%3A%22EGKK%22%2C%22update_flight_data%22%3Afalse%7D%5D%2C%22people%22%3A%5B%5D%7D)
 
 ---
 
