@@ -70,6 +70,11 @@ Top-level keys:
 | `on_blocks`            | String | No       | `HH:MM` zulu. **Clearable**, same as `off_blocks`. |
 | `people`               | Array  | No       | Crew list (see below). `null` is treated as omitted — crew is merge-only, never wiped. |
 | `takeoffs_and_landings`| Object | No       | `{ "takeoffs": n, "landings": n }`, or the day/night split `{ "takeoffs_day": n, "takeoffs_night": n, "landings_day": n, "landings_night": n }` — send **both** counts of whichever shape you use. Both flows accept either shape. **Clearable** — an explicit `null` clears it: the entry reads as 0 takeoffs / 0 landings, untracked. |
+| `approaches`           | Array  | No       | Typed approach counts, e.g. `[{"type": "ils_cat1", "count": 2}, {"type": "rnp", "count": 1}]`. `count` is 1 or more; `type` is one of `ils_cat1`, `ils_cat2`, `ils_cat3`, `gls`, `rnp`, `rnp_ar`, `loc`, `vor`, `ndb`, `visual`, `circling`, `par`. **Clearable** — an explicit `null` clears the whole list. An item with an unrecognised `type` or a count below 1 is handled differently per flow — see "Where the two flows differ". |
+| `go_arounds`           | Integer| No       | Go-arounds flown, 0 or more. **Clearable** — an explicit `null` clears a stored value on a match; omitting the key leaves it untouched. |
+| `passengers_on_board`  | Integer| No       | Passengers carried, 0 or more. **Clearable**, same as `go_arounds`. |
+| `fuel_planned`         | Integer| No       | Planned fuel in **kilograms**, 0 or more — always kilograms, whatever unit the pilot displays in the app. **Clearable**, same as `go_arounds`. |
+| `fuel_used`            | Integer| No       | Fuel actually used in **kilograms**, 0 or more. Same rules as `fuel_planned`. |
 | `remarks`              | String | No       | Free text, max 1000 characters. **Never overwrites remarks the entry already has**, and `null` is always treated as omitted (never a wipe) — see the per-flow rules below. |
 | `is_deleted`           | Bool   | No       | Soft-delete an entry this caller created. `false` restores one. `null` is treated as omitted — deletion state only ever changes on an explicit `true`/`false`. |
 | `update_flight_data`   | Bool   | No       | Auto-update the entry from Jetlog's flight data sources (live airline/airport feeds — unrelated to this API). An explicit value always applies; `null` is treated as omitted, falling through to inference. On **create**, inference is `false` if any actual time (`off_blocks`/`airborne`/`touchdown`/`on_blocks`) is supplied with a real value — so your reported times are what's shown — else `true`; a `null` on one of those fields is a clear, not a supplied time, and never triggers this. On a **re-import/merge** of an existing entry, the inferred switch to `false` happens only when the import actually brings a new or changed real time; a `null` (a clear) never counts as a change, so a row that only clears a time leaves the stored setting untouched, and an identical re-import never flips it either. |
@@ -105,8 +110,9 @@ field:
 
 **(a) Clearable value fields — `null` clears, omitting leaves untouched.**
 `off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`,
-`takeoffs_and_landings`, `actual_from`, and `actual_to` — eight fields —
-treat an explicit `null` on a matching existing entry as a clear: the value
+`takeoffs_and_landings`, `approaches`, `go_arounds`, `passengers_on_board`,
+`fuel_planned`, `fuel_used`, `actual_from`, and `actual_to` — thirteen
+fields — treat an explicit `null` on a matching existing entry as a clear: the value
 is removed. Leaving the key out of the payload entirely, by contrast, leaves
 whatever is already stored untouched — only a *literal* `null` clears.
 Worked example: to blank out an `off_blocks` you imported earlier, re-send
@@ -119,7 +125,7 @@ exception in what it displays afterward: the clear only ever removes the
 registration you sent — while the entry has auto-update on, Jetlog may still
 display the aircraft it tracked for that flight, right after the clear.
 `actual_from`/`actual_to` are clearable on the External Partner API exactly
-like the other six, but **not** on the deeplink: there, an explicit `null`
+like the other eleven, but **not** on the deeplink: there, an explicit `null`
 on either is treated the same as an omitted key — it never clears. See
 "Where the two flows differ" below.
 
@@ -187,13 +193,14 @@ Remarks are the pilot's own text, so an import can add them but not quietly repl
 
 **Where the two flows differ**
 
-`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), non-`"flight"` rows, and the `update_flight_data` inference behave the same way on both flows (optional/defaulted/tolerated). The null-clears-a-value-field rule (see the field table and ["What a JSON `null` means"](#what-a-json-null-means-depends-on-the-field) above) is shared for six of the eight clearable fields, but not for `actual_from`/`actual_to` — see the table below. What's left genuinely differs — check these if you support both:
+`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), non-`"flight"` rows, and the `update_flight_data` inference behave the same way on both flows (optional/defaulted/tolerated). The null-clears-a-value-field rule (see the field table and ["What a JSON `null` means"](#what-a-json-null-means-depends-on-the-field) above) is shared for eleven of the thirteen clearable fields, but not for `actual_from`/`actual_to` — see the table below. What's left genuinely differs — check these if you support both:
 
 | | Deeplink | External Partner API |
 | :-- | :-- | :-- |
 | Entry required fields | `flight_number` **or** `registration` | `from` **and** `to` |
-| `null` on `actual_from`/`actual_to` | Treated as omitted — never a clear | Clears the stored value, like the other six clearable fields |
+| `null` on `actual_from`/`actual_to` | Treated as omitted — never a clear | Clears the stored value, like the other eleven clearable fields |
 | An incomplete `{takeoffs, landings}` pair (only one of the two counts sent) — or an unrecognised explicit `takeoffs_and_landings.type` (anything other than `"auto"`/`"manual"`) | Entry still imports; only the counts are dropped, flagged as a per-row error in the import preview | Whole row skipped — `"invalid_field"`, e.g. `"fields": ["takeoffs_and_landings.landings"]` |
+| An `approaches` item with an unrecognised `type`, or a count below 1 | Entry still imports; only the invalid items are dropped, flagged as a per-row error in the import preview | Whole row skipped — `"invalid_field"`, e.g. `"fields": ["approaches.type"]` |
 | `remarks` on a re-import | Replace / Add choice in the preview | Write-once; never overwritten |
 | Unresolvable `people[].ref_id` | Kept for the import review to resolve | Entry still imports without that crew member; reported in the response's `warnings` array |
 | Matching an existing person | May update their `default_role`, but only when the payload actually supplies one — omitting it never wipes an existing role; also matches on a single name | Never modifies an existing person; matches `employee_number` then first+last only |

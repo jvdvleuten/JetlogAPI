@@ -55,7 +55,7 @@ curl -X POST https://jetlog.app/external/v1/import \
 
 ### Every supported field (deeplink-safe)
 
-All entry fields both flows accept, including the planned times and remarks. (`update_flight_data` is shown explicitly here; omitting it would infer the same `false` on both flows, because the payload carries actual times — see the field table in the README.)
+All entry fields both flows accept, including the planned times, remarks, approaches, go-arounds, passengers and fuel. (`update_flight_data` is shown explicitly here; omitting it would infer the same `false` on both flows, because the payload carries actual times — see the field table in the README.)
 
 ```json
 {
@@ -77,6 +77,16 @@ All entry fields both flows accept, including the planned times and remarks. (`u
         "takeoffs": 1,
         "landings": 1
       },
+      "approaches": [
+        {
+          "type": "ils_cat2",
+          "count": 1
+        }
+      ],
+      "go_arounds": 0,
+      "passengers_on_board": 178,
+      "fuel_planned": 8400,
+      "fuel_used": 7950,
       "remarks": "Line check. CAT II approach.",
       "update_flight_data": false,
       "people": [
@@ -95,10 +105,10 @@ All entry fields both flows accept, including the planned times and remarks. (`u
 curl -X POST https://jetlog.app/external/v1/import \
   -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"entries":[{"type":"flight","date":"2026-08-14","flight_number":"KL1023","scheduled_off_blocks":"14:00","scheduled_on_blocks":"15:10","registration":"PH-BXD","from":"EHAM","to":"EGLL","off_blocks":"14:08","airborne":"14:28","touchdown":"14:55","on_blocks":"15:05","takeoffs_and_landings":{"takeoffs":1,"landings":1},"remarks":"Line check. CAT II approach.","update_flight_data":false,"people":[{"ref_id":"SELF","role":"PIC"}]}],"people":[]}'
+  -d '{"entries":[{"type":"flight","date":"2026-08-14","flight_number":"KL1023","scheduled_off_blocks":"14:00","scheduled_on_blocks":"15:10","registration":"PH-BXD","from":"EHAM","to":"EGLL","off_blocks":"14:08","airborne":"14:28","touchdown":"14:55","on_blocks":"15:05","takeoffs_and_landings":{"takeoffs":1,"landings":1},"approaches":[{"type":"ils_cat2","count":1}],"go_arounds":0,"passengers_on_board":178,"fuel_planned":8400,"fuel_used":7950,"remarks":"Line check. CAT II approach.","update_flight_data":false,"people":[{"ref_id":"SELF","role":"PIC"}]}],"people":[]}'
 ```
 
-[▶ Open this example in Jetlog](https://jetlog.app/import?data=%7B%22entries%22%3A%5B%7B%22type%22%3A%22flight%22%2C%22date%22%3A%222026-08-14%22%2C%22flight_number%22%3A%22KL1023%22%2C%22scheduled_off_blocks%22%3A%2214%3A00%22%2C%22scheduled_on_blocks%22%3A%2215%3A10%22%2C%22registration%22%3A%22PH-BXD%22%2C%22from%22%3A%22EHAM%22%2C%22to%22%3A%22EGLL%22%2C%22off_blocks%22%3A%2214%3A08%22%2C%22airborne%22%3A%2214%3A28%22%2C%22touchdown%22%3A%2214%3A55%22%2C%22on_blocks%22%3A%2215%3A05%22%2C%22takeoffs_and_landings%22%3A%7B%22takeoffs%22%3A1%2C%22landings%22%3A1%7D%2C%22remarks%22%3A%22Line%20check.%20CAT%20II%20approach.%22%2C%22update_flight_data%22%3Afalse%2C%22people%22%3A%5B%7B%22ref_id%22%3A%22SELF%22%2C%22role%22%3A%22PIC%22%7D%5D%7D%5D%2C%22people%22%3A%5B%5D%7D)
+[▶ Open this example in Jetlog](https://jetlog.app/import?data=%7B%22entries%22%3A%5B%7B%22type%22%3A%22flight%22%2C%22date%22%3A%222026-08-14%22%2C%22flight_number%22%3A%22KL1023%22%2C%22scheduled_off_blocks%22%3A%2214%3A00%22%2C%22scheduled_on_blocks%22%3A%2215%3A10%22%2C%22registration%22%3A%22PH-BXD%22%2C%22from%22%3A%22EHAM%22%2C%22to%22%3A%22EGLL%22%2C%22off_blocks%22%3A%2214%3A08%22%2C%22airborne%22%3A%2214%3A28%22%2C%22touchdown%22%3A%2214%3A55%22%2C%22on_blocks%22%3A%2215%3A05%22%2C%22takeoffs_and_landings%22%3A%7B%22takeoffs%22%3A1%2C%22landings%22%3A1%7D%2C%22approaches%22%3A%5B%7B%22type%22%3A%22ils_cat2%22%2C%22count%22%3A1%7D%5D%2C%22go_arounds%22%3A0%2C%22passengers_on_board%22%3A178%2C%22fuel_planned%22%3A8400%2C%22fuel_used%22%3A7950%2C%22remarks%22%3A%22Line%20check.%20CAT%20II%20approach.%22%2C%22update_flight_data%22%3Afalse%2C%22people%22%3A%5B%7B%22ref_id%22%3A%22SELF%22%2C%22role%22%3A%22PIC%22%7D%5D%7D%5D%2C%22people%22%3A%5B%5D%7D)
 
 ### Flight with crew (deeplink-safe)
 
@@ -227,7 +237,7 @@ curl -X POST https://jetlog.app/external/v1/import \
 
 ### Clearing a value you already imported (deeplink-safe)
 
-Re-send the same identity with a field set to explicit `null` to clear it — the one case where `null` isn't the same as leaving the key out (see the README's ["What a JSON `null` means depends on the field"](README.md#what-a-json-null-means-depends-on-the-field)). Eight fields work this way: `off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`, `takeoffs_and_landings`, `actual_from`, `actual_to` — though the last two only clear on the External Partner API; on the deeplink a `null` there is treated as omitted instead, same as `scheduled_off_blocks`/`scheduled_on_blocks`. `scheduled_off_blocks`/`scheduled_on_blocks` themselves are never clearable on either flow — scheduled times are managed by Jetlog's flight tracking, so they can't be cleared by an import.
+Re-send the same identity with a field set to explicit `null` to clear it — the one case where `null` isn't the same as leaving the key out (see the README's ["What a JSON `null` means depends on the field"](README.md#what-a-json-null-means-depends-on-the-field)). Thirteen fields work this way: `off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`, `takeoffs_and_landings`, `approaches`, `go_arounds`, `passengers_on_board`, `fuel_planned`, `fuel_used`, `actual_from`, `actual_to` — though the last two only clear on the External Partner API; on the deeplink a `null` there is treated as omitted instead, same as `scheduled_off_blocks`/`scheduled_on_blocks`. `scheduled_off_blocks`/`scheduled_on_blocks` themselves are never clearable on either flow — scheduled times are managed by Jetlog's flight tracking, so they can't be cleared by an import.
 
 Given an entry already imported with `"off_blocks": "07:05"`, this clears it:
 
@@ -323,6 +333,48 @@ curl -X POST https://jetlog.app/external/v1/import \
 ```
 
 [▶ Open this example in Jetlog](https://jetlog.app/import?data=%7B%22entries%22%3A%5B%7B%22type%22%3A%22flight%22%2C%22date%22%3A%222026-08-17%22%2C%22flight_number%22%3A%22KL1701%22%2C%22from%22%3A%22EHAM%22%2C%22to%22%3A%22LTFM%22%2C%22takeoffs_and_landings%22%3A%7B%22type%22%3A%22manual%22%2C%22takeoffs_day%22%3A1%2C%22takeoffs_night%22%3A0%2C%22landings_day%22%3A0%2C%22landings_night%22%3A1%7D%7D%5D%2C%22people%22%3A%5B%5D%7D)
+
+### Approaches, go-arounds, passengers and fuel (deeplink-safe)
+
+Typed approach counts, go-arounds, passengers on board and fuel figures. `approaches` is a list of `{"type": ..., "count": n}` objects — `count` is 1 or more, and `type` is one of `ils_cat1`, `ils_cat2`, `ils_cat3`, `gls`, `rnp`, `rnp_ar`, `loc`, `vor`, `ndb`, `visual`, `circling`, `par`. Fuel is always kilograms; the app shows fuel in the pilot's preferred unit. All five fields clear with an explicit `null`, like `off_blocks`. An approaches item with an unrecognised `type` (or a count below 1) is handled differently per flow — see "Where the two flows differ" in the README.
+
+```json
+{
+  "entries": [
+    {
+      "type": "flight",
+      "date": "2026-08-15",
+      "flight_number": "KL1613",
+      "from": "EHAM",
+      "to": "LPPT",
+      "approaches": [
+        {
+          "type": "ils_cat1",
+          "count": 2
+        },
+        {
+          "type": "rnp",
+          "count": 1
+        }
+      ],
+      "go_arounds": 1,
+      "passengers_on_board": 178,
+      "fuel_planned": 8400,
+      "fuel_used": 7950
+    }
+  ],
+  "people": []
+}
+```
+
+```sh
+curl -X POST https://jetlog.app/external/v1/import \
+  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"entries":[{"type":"flight","date":"2026-08-15","flight_number":"KL1613","from":"EHAM","to":"LPPT","approaches":[{"type":"ils_cat1","count":2},{"type":"rnp","count":1}],"go_arounds":1,"passengers_on_board":178,"fuel_planned":8400,"fuel_used":7950}],"people":[]}'
+```
+
+[▶ Open this example in Jetlog](https://jetlog.app/import?data=%7B%22entries%22%3A%5B%7B%22type%22%3A%22flight%22%2C%22date%22%3A%222026-08-15%22%2C%22flight_number%22%3A%22KL1613%22%2C%22from%22%3A%22EHAM%22%2C%22to%22%3A%22LPPT%22%2C%22approaches%22%3A%5B%7B%22type%22%3A%22ils_cat1%22%2C%22count%22%3A2%7D%2C%7B%22type%22%3A%22rnp%22%2C%22count%22%3A1%7D%5D%2C%22go_arounds%22%3A1%2C%22passengers_on_board%22%3A178%2C%22fuel_planned%22%3A8400%2C%22fuel_used%22%3A7950%7D%5D%2C%22people%22%3A%5B%5D%7D)
 
 ### IATA codes (deeplink-safe)
 
