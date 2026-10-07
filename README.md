@@ -75,6 +75,7 @@ Top-level keys:
 | `passengers_on_board`  | Integer| No       | Passengers carried, 0 or more. **Clearable**, same as `go_arounds`. |
 | `fuel_planned`         | Integer| No       | Planned fuel in **kilograms**, 0 or more — always kilograms, whatever unit the pilot displays in the app. **Clearable**, same as `go_arounds`. |
 | `fuel_used`            | Integer| No       | Fuel actually used in **kilograms**, 0 or more. Same rules as `fuel_planned`. |
+| `cargo_on_board`       | Integer| No       | Cargo carried in **kilograms**, 0 or more. Same rules as `fuel_planned`. |
 | `remarks`              | String | No       | Free text, max 1000 characters. **Never overwrites remarks the entry already has**, and `null` is always treated as omitted (never a wipe) — see the per-flow rules below. |
 | `is_deleted`           | Bool   | No       | Soft-delete an entry this caller created. `false` restores one. `null` is treated as omitted — deletion state only ever changes on an explicit `true`/`false`. |
 | `update_flight_data`   | Bool   | No       | Auto-update the entry from Jetlog's flight data sources (live airline/airport feeds — unrelated to this API). An explicit value always applies; `null` is treated as omitted, falling through to inference. On **create**, inference is `false` if any actual time (`off_blocks`/`airborne`/`touchdown`/`on_blocks`) is supplied with a real value — so your reported times are what's shown — else `true`; a `null` on one of those fields is a clear, not a supplied time, and never triggers this. On a **re-import/merge** of an existing entry, the inferred switch to `false` happens only when the import actually brings a new or changed real time; a `null` (a clear) never counts as a change, so a row that only clears a time leaves the stored setting untouched, and an identical re-import never flips it either. |
@@ -111,8 +112,8 @@ field:
 **(a) Clearable value fields — `null` clears, omitting leaves untouched.**
 `off_blocks`, `airborne`, `touchdown`, `on_blocks`, `registration`,
 `takeoffs_and_landings`, `approaches`, `go_arounds`, `passengers_on_board`,
-`fuel_planned`, `fuel_used`, `actual_from`, and `actual_to` — thirteen
-fields — treat an explicit `null` on a matching existing entry as a clear: the value
+`fuel_planned`, `fuel_used`, `cargo_on_board`, `actual_from`, and `actual_to` —
+fourteen fields — treat an explicit `null` on a matching existing entry as a clear: the value
 is removed. Leaving the key out of the payload entirely, by contrast, leaves
 whatever is already stored untouched — only a *literal* `null` clears.
 Worked example: to blank out an `off_blocks` you imported earlier, re-send
@@ -193,7 +194,7 @@ Remarks are the pilot's own text, so an import can add them but not quietly repl
 
 **Where the two flows differ**
 
-`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), non-`"flight"` rows, and the `update_flight_data` inference behave the same way on both flows (optional/defaulted/tolerated). The null-clears-a-value-field rule (see the field table and ["What a JSON `null` means"](#what-a-json-null-means-depends-on-the-field) above) is shared for eleven of the thirteen clearable fields, but not for `actual_from`/`actual_to` — see the table below. What's left genuinely differs — check these if you support both:
+`people`, `type`, the *shape* of `takeoffs_and_landings` (plain vs. day/night), non-`"flight"` rows, and the `update_flight_data` inference behave the same way on both flows (optional/defaulted/tolerated). The null-clears-a-value-field rule (see the field table and ["What a JSON `null` means"](#what-a-json-null-means-depends-on-the-field) above) is shared for twelve of the fourteen clearable fields, but not for `actual_from`/`actual_to` — see the table below. What's left genuinely differs — check these if you support both:
 
 | | Deeplink | External Partner API |
 | :-- | :-- | :-- |
