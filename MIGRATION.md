@@ -37,7 +37,7 @@ Sections:
 - The URL. `/api/partner/v1/import` instead of `/external/v1/import`.
 - How a pilot connects. The pilot approves your app in the Jetlog app, instead of copying a key out of it.
 - Lifetime. Access tokens last one hour and refresh tokens 90 days. The keys do not expire.
-- At most 200 entries and 1000 people per request on the token route.
+- At most 200 entries, 1000 people and 2 MB of body per request on the token route.
 - The pilot does not need the external source selected in Jetlog. The connection is listed under Settings > Connected Apps and works next to a calendar or roster source the pilot has set up.
 - With `scope=import`, what a token may do is what the key pair may do: add flights with their crew, and change or delete the flights your partner registration created. It cannot read the logbook or touch anything else. A wider level exists and is optional, see [Access levels](#access-levels).
 - Calls on the token route do not create an import batch in the pilot's list of imports. They are recorded in the audit log.
@@ -52,7 +52,7 @@ Sections:
 | What the partner stores | One partner key for all pilots, one user key per pilot | No shared secret. One refresh token per pilot |
 | Lifetime | Neither key expires | Access token 1 hour. Refresh token 90 days, replaced on every use |
 | What it may do | Add flights, change and delete the flights the partner created | The same with `scope=import`. A wider level is optional, see [Access levels](#access-levels) |
-| Requests | No cap documented | At most 200 entries and 1000 people |
+| Requests | No cap documented | At most 200 entries, 1000 people and 2 MB |
 | Pilot's source setting in Jetlog | Must be the external source | No requirement |
 | How to disconnect | The pilot changes the source in the Source screen of the Jetlog app | The partner calls the revoke endpoint, or the pilot removes the app under Settings > Connected Apps |
 
@@ -235,7 +235,7 @@ curl -sS -X POST https://jetlog.app/api/partner/v1/import \
 
 The body and the response are the ones described in the [README](README.md) and in [EXAMPLES.md](EXAMPLES.md). Read `skipped` and `warnings` on every response, because a `200` does not mean every row landed.
 
-Send at most 200 entries and 1000 people per request. Include in each request the `people` its entries refer to, because a `ref_id` only has meaning inside one request.
+Send at most 200 entries and 1000 people per request, in a body of at most 2 MB. Include in each request the `people` its entries refer to, because a `ref_id` only has meaning inside one request.
 
 **Refreshing.** The access token lasts one hour. Refresh a minute or so before it expires, or when a call answers `401`:
 
@@ -377,6 +377,7 @@ A pilot who uses your phone app and your server needs one holder of the refresh 
 | `403` | `{"error":"insufficient_scope"}` | The token does not carry the `import` scope | The pilot connects again with `scope=import` |
 | `413` | `{"error":"too_many_entries","max":200}` | More than 200 entries in one request | Split the payload into requests of at most 200 entries. Nothing was written |
 | `413` | `{"error":"too_many_people","max":1000}` | More than 1000 people in one request | Send only the people the entries in that request refer to. Nothing was written |
+| `413` | `{"error":"payload_too_large","max_bytes":2097152}` | The body is larger than 2 MB. It is checked from the `Content-Length` header before anything else, so it can come before the token check | Split the payload into smaller requests. Nothing was written |
 | `429` | A `Retry-After` header, in seconds, and `{"error":"rate_limited","retry_after":n}` | Too many requests for this pilot | Wait for `Retry-After`, then send the same request. Send one pilot's imports one after another |
 | `400` | `{"error":"<code>"}`, for example `invalid_payload` | The payload could not be imported as a whole | Fix the payload. Nothing was written |
 | `400` for a body that is not valid JSON, and any `5xx` | `{"errors":{"detail":"<status text>"}}` | The request could not be read, or something failed on the Jetlog side | Fix the request body. After a `5xx`, resend the same payload. It is safe, because matching applies the same rows again |
@@ -436,7 +437,7 @@ You can repeat the same payload on the token route that you sent on the key rout
 - [ ] Tokens live in the Keychain, the Android Keystore or encrypted server storage, and not in logs.
 - [ ] One refresh at a time per pilot, and the new refresh token is saved before the response is used.
 - [ ] A `401` triggers one refresh and one retry. A failed refresh moves the pilot to "not connected".
-- [ ] Requests have at most 200 entries and 1000 people, include the `people` they refer to, and wait out `Retry-After` on a `429`.
+- [ ] Requests have at most 200 entries, 1000 people and 2 MB of body, include the `people` they refer to, and wait out `Retry-After` on a `429`.
 - [ ] `skipped` and `warnings` are read on every response.
 - [ ] Disconnecting calls the revoke endpoint and deletes the stored tokens.
 - [ ] Pilots still on a key keep using it until they move, and are moved the next time they open the app.

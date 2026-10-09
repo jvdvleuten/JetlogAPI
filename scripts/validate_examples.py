@@ -400,19 +400,49 @@ PROPOSAL_FIELDS = {
 }
 PREVIEW_FIELDS = {"index", "op", "resource", "id", "before", "after", "changed_fields"}
 OPERATION_FIELDS = {"op", "resource", "id", "data", "add_self"}
-# What `data` may carry for the two resources a partner proposes changes on.
+# What `data` may carry for the two resources a partner proposes changes on: exactly the
+# fields the pilot is shown a before and an after value for, and nothing else.
 ENTRY_DATA_KEYS = {
-    "type", "date", "flight_number", "registration", "from", "to", "actual_from", "actual_to",
-    "scheduled_off_blocks", "off_blocks", "airborne", "touchdown", "on_blocks",
-    "update_flight_data", "remarks", "people", "takeoffs_and_landings", "approaches",
-    "go_arounds", "passengers_on_board", "cargo_on_board", "fuel_planned", "fuel_used",
-    "is_deleted",
+    "type", "flight_number", "date", "registration", "from", "to", "off_blocks", "airborne",
+    "touchdown", "on_blocks", "remarks", "people", "is_deleted",
 }
-ENTRY_TIME_KEYS = {"scheduled_off_blocks", "off_blocks", "airborne", "touchdown", "on_blocks"}
-PERSON_DATA_KEYS = {"first_name", "last_name", "default_role", "employee_number"}
+ENTRY_TIME_KEYS = {"off_blocks", "airborne", "touchdown", "on_blocks"}
+# On a flight Jetlog tracks, these follow the flight feed: a proposal for them is refused.
+FEED_KEYS = ENTRY_TIME_KEYS | {"registration"}
+PERSON_DATA_KEYS = {
+    "first_name", "last_name", "default_role", "employee_number",
+    "is_imported_from_other_logbook", "is_deleted",
+}
+MAX_CREW = 20
+MAX_OPEN_PER_CONNECTION = 5
+BODY_LIMITS = {"POST /changes": 262144, "POST /import": 2097152}
+# Messages of the 422 refusals, as templates.
+REFUSAL_TEMPLATES = [
+    "connected apps cannot propose {key}",
+    "{key} would change nothing you can see in the logbook for this flight (it follows the flight feed), so connected apps cannot propose it",
+    'connected apps can only add flights (type "flight")',
+    'connected apps can only change flights (type "flight")',
+    "connected apps cannot propose changes to {resource}",
+    "at most 20 crew members per flight",
+    "each crew member is an object with person_id and role",
+    "must be a list of crew members",
+    "must be a single value",
+]
+REFUSAL_PATTERNS = [
+    re.compile(r"connected apps cannot propose \w+"),
+    re.compile(r"\w+ would change nothing you can see in the logbook for this (flight|person) \(it follows the flight feed\), so connected apps cannot propose it"),
+    re.compile(r'connected apps can only (add|change) flights \(type "flight"\)'),
+    re.compile(r"connected apps cannot propose changes to \w+"),
+    re.compile(r"at most 20 crew members per flight"),
+    re.compile(r"each crew member is an object with person_id and role"),
+    re.compile(r"must be a list of crew members"),
+    re.compile(r"must be a single value"),
+    re.compile(r"(entry|person) [0-9a-f-]{36} not found"),
+    re.compile(r"unknown person_id\(s\): .+"),
+]
 ENTRIES_QUERY = {
     "from", "to", "type", "registration", "airport", "flight_number", "person_id", "role",
-    "include_deleted", "limit", "after_date", "after_id",
+    "limit", "after_date", "after_id",
 }
 TOTALS_QUERY = {"from", "to"}
 CALCULATED_FIELDS = {
@@ -427,17 +457,17 @@ CALCULATED_FIELDS = {
     "fstd_examiner_time", "fstd_senior_instructor_time", "cross_country_distance", "computed_at",
 }
 # One row of GET /entries as a partner sees it: the shape the Jetlog app gets, with no
-# signature, attachment or photo fields at all.
+# signature, attachment or photo fields, no `entry_source`, none of the flight feed
+# columns, and `is_own` added.
 ENTRY_ROW_KEYS = {
-    "id", "version", "type", "date", "entry_source", "flight_number", "registration", "from", "to",
+    "id", "version", "type", "date", "flight_number", "registration", "from", "to",
     "actual_from", "actual_to", "off_blocks", "airborne", "touchdown", "on_blocks",
-    "registration_system", "off_blocks_system", "airborne_system", "touchdown_system",
-    "on_blocks_system", "system_date", "system_from", "system_to", "update_flight_data", "derived",
+    "update_flight_data", "derived",
     "ifr", "is_completed", "is_bulk", "manual_times", "aircraft_icao_code",
     "takeoffs_and_landings", "approaches", "go_arounds", "passengers_on_board", "fuel_planned",
     "fuel_used", "cargo_on_board", "start_time", "end_time", "fstd_id", "session_type",
     "fstd_takeoffs", "fstd_landings", "is_imported_from_other_logbook", "is_deleted", "remarks",
-    "people", "updated_at", "calculated_times",
+    "people", "updated_at", "calculated_times", "is_own",
 }
 DERIVED_KEYS = {"date", "registration", "from", "to", "off_blocks", "airborne", "touchdown", "on_blocks"}
 PERSON_ROW_KEYS = {
@@ -450,6 +480,9 @@ HIDDEN_KEYS = {
     "signature", "signature_attachment_id", "signature_sha256", "signature_waived",
     "signature_change", "attachment_count", "attachments", "has_photo", "photo",
     "photo_attachment_id", "photo_sha256", "raw_before",
+    # Which other integration or import a pilot uses, and the raw flight feed columns.
+    "entry_source", "registration_system", "off_blocks_system", "airborne_system",
+    "touchdown_system", "on_blocks_system", "system_date", "system_from", "system_to",
 }
 # What a proposal refuses, and the permission it names.
 REFUSED_RESOURCES = {"entry_attachment": "files", "signature_link": "signatures"}
@@ -509,27 +542,23 @@ def check_data(where: str, resource: str, op: str, data: dict, known_people: set
             fail(where, "an entry create needs `type: flight`")
         if not DATE.fullmatch(str(data.get("date", ""))):
             fail(where, "an entry create needs a `date` in YYYY-MM-DD form")
+        if "registration" in data and not (ENTRY_TIME_KEYS & set(data)):
+            fail(where, "a new flight without an actual time is tracked, so a registration on it is refused")
+    elif data.get("type", "flight") != "flight":
+        fail(where, "an update cannot change `type`")
     if "date" in data and not DATE.fullmatch(str(data["date"])):
         fail(where, "`date` must be YYYY-MM-DD")
     for key in ENTRY_TIME_KEYS & set(data):
         if not CLOCK.fullmatch(str(data[key])):
             fail(where, f"`{key}` must be HH:MM")
-    for key in ("from", "to", "actual_from", "actual_to"):
+    for key in ("from", "to"):
         if key in data and not re.fullmatch(r"[A-Z]{4}", str(data[key])):
-            fail(where, f"`{key}` must be an ICAO code")
-    tal = data.get("takeoffs_and_landings")
-    if tal is not None:
-        if tal.get("type") == "auto":
-            ok = set(tal) == {"type", "takeoffs", "landings"}
-        elif tal.get("type") == "manual":
-            ok = set(tal) == {"type", "takeoffs_day", "takeoffs_night", "landings_day", "landings_night"}
-        else:
-            ok = False
-        if not ok:
-            fail(where, "`takeoffs_and_landings` needs `type` auto or manual with exactly that shape's counts")
-    for item in data.get("approaches") or []:
-        if not set(item) <= {"type", "count", "autolands"} or not {"type", "count"} <= set(item):
-            fail(where, "an approach needs `type` and `count`")
+            fail(where, f"`{key}` must be an ICAO code in capital letters")
+    for key, value in data.items():
+        if key != "people" and isinstance(value, (dict, list)):
+            fail(where, f"`{key}` must be a single value")
+    if len(data.get("people") or []) > MAX_CREW:
+        fail(where, f"a proposal carries at most {MAX_CREW} crew members per flight")
     for item in data.get("people") or []:
         if not isinstance(item, dict) or not set(item) <= {"person_id", "role", "is_deleted"}:
             fail(where, "a crew item has only `person_id`, `role` and `is_deleted`")
@@ -541,7 +570,9 @@ def check_data(where: str, resource: str, op: str, data: dict, known_people: set
             fail(where, "a crew item needs a `role`")
 
 
-def check_proposal(where: str, payload: object, known_entries: set[str], known_people: set[str]) -> None:
+def check_proposal(
+    where: str, payload: object, known_entries: set[str], known_people: set[str], tracked: set[str]
+) -> None:
     if not isinstance(payload, dict) or set(payload) != {"summary", "operations"}:
         fail(where, "a proposal has exactly `summary` and `operations`")
         return
@@ -587,6 +618,8 @@ def check_proposal(where: str, payload: object, known_entries: set[str], known_p
                 fail(at, "a create or update needs a non-empty `data` object")
             else:
                 check_data(at, resource, kind, data, known_people | created_people)
+                if resource == "entry" and kind == "update" and record_id in tracked and FEED_KEYS & set(data):
+                    fail(at, f"{sorted(FEED_KEYS & set(data))} follow the flight feed on a tracked flight and are refused")
         if "add_self" in op and not (kind == "create" and resource == "entry" and isinstance(op["add_self"], bool)):
             fail(at, "`add_self` is a boolean on an entry create only")
 
@@ -600,17 +633,20 @@ def check_entry_row(where: str, row: dict) -> None:
     if set(row["derived"]) != DERIVED_KEYS:
         fail(where, "`derived` keys differ from the documented ones")
         return
-    for key in ("off_blocks", "airborne", "touchdown", "on_blocks"):
-        for source in (key, f"{key}_system"):
-            if row[source] is not None and not CLOCK_SECONDS.fullmatch(row[source]):
-                fail(where, f"`{source}` must be HH:MM:SS")
-    # `derived` is the system value while tracking is on, the entered value otherwise.
-    tracking = row["update_flight_data"]
-    for key in ("off_blocks", "airborne", "touchdown", "on_blocks"):
-        if row["derived"][key] != row[f"{key}_system" if tracking else key]:
-            fail(where, f"`derived.{key}` does not follow `update_flight_data`")
-    if row["derived"]["registration"] != row["registration_system" if tracking else "registration"]:
-        fail(where, "`derived.registration` does not follow `update_flight_data`")
+    for key in ENTRY_TIME_KEYS:
+        for value in (row[key], row["derived"][key]):
+            if value is not None and not CLOCK_SECONDS.fullmatch(value):
+                fail(where, f"`{key}` must be HH:MM:SS")
+    if not isinstance(row["is_own"], bool):
+        fail(where, "`is_own` is true or false")
+    # Without tracking, `derived` is the plain fields. With it, the feed decides, and the
+    # plain times of the example are empty.
+    if row["update_flight_data"] is False:
+        for key in ENTRY_TIME_KEYS | {"registration", "date"}:
+            if row["derived"][key] != row[key]:
+                fail(where, f"`derived.{key}` must equal `{key}` on a flight that is not tracked")
+    elif any(row[key] is not None for key in ENTRY_TIME_KEYS):
+        fail(where, "the plain times of a tracked flight in the examples are empty, the feed fills `derived`")
     timestamp(f"{where} updated_at", row["updated_at"])
     for person in row["people"]:
         if set(person) != {"person_id", "role", "is_deleted"}:
@@ -697,12 +733,14 @@ def check_partner_api(document: dict | None) -> None:
             fail(f"{where} json block at offset {m.start()}", f"invalid JSON: {e}")
         checked["partner_json"] += 1
 
-    known_entries, known_people = set(), set()
+    known_entries, known_people, tracked = set(), set(), set()
     for _, body in blocks:
         if not isinstance(body, dict):
             continue
         for row in body.get("entries", []) + ([body["entry"]] if "entry" in body else []):
             known_entries.add(row["id"])
+            if row.get("update_flight_data") is True:
+                tracked.add(row["id"])
         known_people |= {p["id"] for p in body.get("people", [])}
         if "self_person_id" in body:
             known_people.add(body["self_person_id"])
@@ -770,7 +808,7 @@ def check_partner_api(document: dict | None) -> None:
                 except json.JSONDecodeError as e:
                     fail(at, f"invalid JSON body: {e}")
                     continue
-                check_proposal(at, payload, known_entries, known_people)
+                check_proposal(at, payload, known_entries, known_people, tracked)
                 requests[payload.get("summary")] = payload
     for route in sorted(set(PARTNER_ROUTES) - covered - {("POST", "/import")}):
         fail(where, f"no curl example for {route[0]} {route[1]}")
@@ -827,10 +865,18 @@ def check_partner_api(document: dict | None) -> None:
                 fail(at, "`GET /me` is exactly `user_id` and `self_person_id`")
             elif not UUID.fullmatch(body["user_id"]) or body["self_person_id"] != body["user_id"]:
                 fail(at, "`self_person_id` is the pilot's own id")
+        elif body.get("error") == "payload_too_large":
+            if set(body) != {"error", "max_bytes"} or body["max_bytes"] not in BODY_LIMITS.values():
+                fail(at, f"a too large body answers `payload_too_large` with `max_bytes` of one of {sorted(BODY_LIMITS.values())}")
         elif "error" in body:
             err = body["error"]
             if not (isinstance(err, str) or (isinstance(err, dict) and "message" in err)):
                 fail(at, "an error body is `{\"error\": \"code\"}` or `{\"error\": {\"message\": ...}}`")
+            for item in (err.get("errors", []) if isinstance(err, dict) else []):
+                if set(item) != {"index", "field", "message"}:
+                    fail(at, "an error item has `index`, `field` and `message`")
+                elif not any(pattern.fullmatch(item["message"]) for pattern in REFUSAL_PATTERNS):
+                    fail(at, f"the message {item['message']!r} is not one Jetlog sends")
         else:
             fail(at, "a json block of a kind the validator does not know")
         for path in hidden_keys_in(body):
@@ -885,9 +931,35 @@ def check_partner_api(document: dict | None) -> None:
     positions = [access.find(code) for code in ("invalid_token", "insufficient_scope", "integration_disabled", "insufficient_access")]
     if -1 in positions or positions != sorted(positions):
         fail(where, "the access checks must list invalid_token, insufficient_scope, integration_disabled and insufficient_access, in that order")
-    limits = section("Rate limits")
-    if not re.search(r"^\| `GET /changes/:id` \| Nothing\.", limits, re.M):
-        fail(where, "the rate limit table must say that GET /changes/:id is not limited")
+    rates = section("Rate limits")
+    rate_rows = {
+        match.group(1): match.group(2).strip()
+        for match in re.finditer(r"^\| (.+?) \| .*? \| (Connection|Pilot) \|$", rates, re.M)
+    }
+    poll = [routes for routes in rate_rows if "`GET /changes/:id`" in routes]
+    if len(poll) != 1 or "`GET /entries`" not in poll[0] or rate_rows[poll[0]] != "Connection":
+        fail(where, "the status poll shares the per connection read limit, in the same row as the read routes")
+    if rate_rows.get("`POST /changes`") != "Connection" or rate_rows.get("`POST /import`") != "Pilot":
+        fail(where, "proposals are limited per connection and the import per pilot")
+    if re.search(r"not rate limited|never rate limited", text):
+        fail(where, "the status poll is rate limited, so no sentence may say it is not")
+
+    limits = section("Limits")
+    for needle in (
+        f"| Open proposals per connection | {MAX_OPEN_PER_CONNECTION} |",
+        f"| Crew members per flight in a proposal | {MAX_CREW} |",
+        "| Body of `POST /changes` | 256 KB |",
+        "| Body of `POST /import` | 2 MB |",
+        "| Operations in one proposal | 200 |",
+    ):
+        if needle not in limits:
+            fail(where, f"the limits table must contain {needle!r}")
+    if re.search(r"per pilot", limits) or "20 open" in text or "20 open proposals" in text:
+        fail(where, "open proposals are limited per connection to 5, not per pilot to 20")
+    for template in REFUSAL_TEMPLATES:
+        needle = template.replace("{key}", "").replace("{resource}", "")
+        if needle.strip() and needle.split("{")[0].strip() not in text:
+            fail(where, f"the document must show the refusal message {template!r}")
 
     flat = {"GET /entries", "GET /entries/:id", "GET /totals"}
     for row in re.finditer(r"^\| `(GET|POST) (/[^`]*)` \| `(\d{3})` \| `(\{.*?\})` \|", section("Errors per route"), re.M):
@@ -895,11 +967,17 @@ def check_partner_api(document: dict | None) -> None:
         if route in flat and not shown.startswith('{"error":"'):
             fail(where, f"{route} answers with a flat error body, not {shown}")
         if route in ("POST /changes", "GET /changes/:id"):
-            refusal = status == "403"
-            if refusal and '"missing_scopes"' not in shown:
+            flat_answer = status in ("401", "403") or "payload_too_large" in shown
+            if status == "403" and '"missing_scopes"' not in shown:
                 fail(where, "the 403 of POST /changes is the flat refusal with `missing_scopes`")
-            if not refusal and not shown.startswith('{"error":{'):
+            if status == "413" and "payload_too_large" in shown and f'"max_bytes":{BODY_LIMITS[route]}' not in shown:
+                fail(where, f"the 413 of {route} names {BODY_LIMITS[route]} bytes")
+            if not flat_answer and not shown.startswith('{"error":{'):
                 fail(where, f"{route} answers with a nested error body, not {shown}")
+            if flat_answer and not shown.startswith('{"error":"'):
+                fail(where, f"{route} answers {status} with a flat error body, not {shown}")
+        if route == "POST /import" and status == "413" and f'"max_bytes":{BODY_LIMITS[route]}' not in shown:
+            fail(where, f"the 413 of {route} names {BODY_LIMITS[route]} bytes")
 
     # --- The authorization request and the level names agree with MIGRATION.md. ---
     for sh in re.finditer(r"```sh\n(.*?)\n```", text, re.S):

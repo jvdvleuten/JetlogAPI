@@ -277,7 +277,7 @@ A partner sends the access token a pilot approved: `Authorization: Bearer <acces
 | Level | Scope | What the token can do |
 | :-- | :-- | :-- |
 | Own flights | `import` | Add flights, and change or delete the flights the partner created, through the import route below. It cannot read the logbook or change anything else. |
-| Whole logbook | `import read write` | The same, plus reading the logbook and proposing changes to anything in it. A proposal changes nothing until the pilot approves it in the Jetlog app. |
+| Whole logbook | `import read write` | The same, plus reading the logbook and proposing changes to flights and crew members. A proposal changes nothing until the pilot approves it in the Jetlog app. |
 
 The partner asks for `scope=import` or `scope=import read write`, and the `scope` of the token response says what the pilot granted, which can be less than was asked. Jetlog enables the whole logbook level for each partner separately. The read routes, the proposals and all their errors are in [PARTNER_API.md](PARTNER_API.md).
 
@@ -297,7 +297,7 @@ Content-Type: application/json
 Authorization: Bearer <access_token>
 ```
 
-Send at most 200 entries and 1000 people per request, with the `people` those entries refer to. The errors that belong to this route:
+Send at most 200 entries and 1000 people per request, in a body of at most 2 MB, with the `people` those entries refer to. The errors that belong to this route:
 
 | Status | Body | Meaning |
 | :-- | :-- | :-- |
@@ -306,6 +306,7 @@ Send at most 200 entries and 1000 people per request, with the `people` those en
 | `403` | `{"error":"insufficient_scope"}` | The token does not carry the `import` scope. |
 | `413` | `{"error":"too_many_entries","max":200}` | More than 200 entries in one request. Nothing is written. |
 | `413` | `{"error":"too_many_people","max":1000}` | More than 1000 people in one request. Nothing is written. |
+| `413` | `{"error":"payload_too_large","max_bytes":2097152}` | The body is larger than 2 MB. It is checked from the `Content-Length` header before anything else. Nothing is written. |
 | `429` | `Retry-After` header | Too many requests. Wait that many seconds. |
 
 Entries created through the older key authentication stay the partner's own after it switches to tokens, so a token can amend or delete them.
@@ -411,4 +412,4 @@ Responses from this route carry `Deprecation: true` and a `Link` header with `re
 ## Tips
 - Keep `ref_id` unique in `people`; reuse in `entries[*].people`.
 - Use UTC for times; `date` is `YYYY-MM-DD`.
-- Batch large external imports (at most 200 entries and 1000 people per request on the token route); split deeplinks if URLs get too long.
+- Batch large external imports (at most 200 entries, 1000 people and 2 MB per request on the token route); split deeplinks if URLs get too long.
