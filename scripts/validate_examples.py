@@ -433,6 +433,8 @@ REFUSAL_TEMPLATES = [
     "each crew member is an object with person_id and role",
     "must be a list of crew members",
     "must be a single value",
+    "a delete carries no data",
+    "must be true or false",
 ]
 REFUSAL_PATTERNS = [
     re.compile(r"connected apps cannot propose \w+"),
@@ -445,6 +447,8 @@ REFUSAL_PATTERNS = [
     re.compile(r"each crew member is an object with person_id and role"),
     re.compile(r"must be a list of crew members"),
     re.compile(r"must be a single value"),
+    re.compile(r"a delete carries no data, \w+ is not allowed"),
+    re.compile(r"must be true or false"),
     re.compile(r"(entry|person) [0-9a-f-]{36} not found"),
     re.compile(r"unknown person_id\(s\): .+"),
 ]
@@ -760,6 +764,15 @@ def check_partner_api(document: dict | None) -> None:
             if not cmd.startswith("curl"):
                 continue
             at = f"{where} curl at offset {sh.start()}"
+            # The walkthrough also calls the token endpoint: a form post, with the client
+            # secret in the body and never in a header.
+            if re.search(r"https://jetlog\.app/oauth/token(?![\w/])", cmd):
+                checked["partner_curl"] += 1
+                if not re.search(r"grant_type=(authorization_code|refresh_token)\b", cmd):
+                    fail(at, "a token endpoint call needs `grant_type=authorization_code` or `grant_type=refresh_token`")
+                if "Authorization:" in cmd:
+                    fail(at, "the token endpoint takes the client secret in the body, not in an Authorization header")
+                continue
             url_m = re.search(r"https://jetlog\.app/api/partner/v1[^\s\"']*", cmd)
             if not url_m:
                 fail(at, "a curl that does not call a partner route")

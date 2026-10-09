@@ -10,7 +10,7 @@ The **JSON payload is the same** for both flows (see "Payload schema" below).
 
 **Auth, in one line:** External Partner API calls send `Authorization: Bearer <access_token>`. The partner gets the token by sending the pilot through an OAuth authorization code flow with PKCE, which the pilot approves in the Jetlog app. The pilot picks the access level in that approval, as described in [PARTNER_API.md](PARTNER_API.md#access-levels). The short version is under [External Partner API](#external-partner-api) in the Reference part below, and every request and error is in **[MIGRATION.md](MIGRATION.md)**.
 
-A small [sample app](https://github.com/jvdvleuten/jetlog-sample-app) runs the whole partner flow against a pilot's own account.
+A small [sample app](https://github.com/jvdvleuten/jetlog-sample-app) runs the connection flow, an import and the token refresh against a pilot's own account.
 
 The earlier authentication with `Bearer <user_key>:<partner_key>` on `/external/v1/import` is **deprecated** but still works. It is described under [Deprecated: key authentication](#deprecated-key-authentication).
 
@@ -279,14 +279,14 @@ A partner sends the access token a pilot approved: `Authorization: Bearer <acces
 | Own flights | `import` | Add flights, and change or delete the flights the partner created, through the import route below. It cannot read the logbook or change anything else. |
 | Whole logbook | `import read write` | The same, plus reading the logbook and proposing changes to flights and crew members. A proposal changes nothing until the pilot approves it in the Jetlog app. |
 
-The partner asks for `scope=import` or `scope=import read write`, and the `scope` of the token response says what the pilot granted, which can be less than was asked. Jetlog enables the whole logbook level for each partner separately, on request in the developer console. The read routes, the proposals and all their errors are in [PARTNER_API.md](PARTNER_API.md).
+The partner asks for `scope=import` or `scope=import read write`, and the `scope` of the token response says what the pilot granted, which can be less than was asked. Jetlog enables the whole logbook level for each partner separately, on request in the developer console. The app also needs a client secret, approved redirect addresses and no loopback address among them, see [Asking for a level](PARTNER_API.md#asking-for-a-level). An app that does not meet these gets the own flights level when it asks for more. The read routes, the proposals and all their errors are in [PARTNER_API.md](PARTNER_API.md).
 
 How a partner gets a token, in short:
-1. Register your app in the developer console at `https://jetlog.app/developers/console`. An overview for developers is at `https://jetlog.app/developers`. You sign in with the email address of a Jetlog account, put the verification value from the console in a metadata document (a small JSON file with the field `jetlog_developer`) on your own domain, and submit the name pilots will see and the address of the document. The address is your `client_id`. Jetlog reviews every app and emails the decision. A partner that already sends flights with the key pair does not register in the console. It writes to support@jetlog.app, and Jetlog links its document to its existing registration.
+1. Register your app in the developer console at `https://jetlog.app/developers/console`. An overview for developers is at `https://jetlog.app/developers`. You sign in with the email address of a Jetlog account, put the verification value from the console in a metadata document (a small JSON file with the field `jetlog_developer`) on your own domain, and submit the name pilots will see and the address of the document. The address is your `client_id`. Jetlog reviews every app and emails the decision. On the app's page in the console you can generate a client secret, which Jetlog shows once. A partner that already sends flights with the key pair does not register in the console. It writes to support@jetlog.app, and Jetlog links its document to its existing registration.
 2. Send the pilot to `https://jetlog.app/oauth/authorize` with `response_type=code`, your `client_id`, a `redirect_uri` from the document, `scope=import` (or `scope=import read write` to let the pilot choose the whole logbook level), `resource=https://jetlog.app/api/partner/v1`, a `state` and a PKCE S256 `code_challenge`. The pilot approves in the Jetlog app.
-3. Exchange the code at `https://jetlog.app/oauth/token`. The answer holds an access token (valid for 1 hour), a refresh token (valid for 90 days, replaced on every use) and the granted `scope`.
+3. Exchange the code at `https://jetlog.app/oauth/token`. The answer holds an access token (valid for 1 hour), a refresh token (valid for 90 days, replaced on every use) and the granted `scope`. An app that has a client secret sends it as `client_secret` in the body of this request and of every refresh. Without it the answer is `401` with `{"error":"invalid_client"}`, and the code or refresh token can be used again with the right secret.
 4. Call the endpoint below with the access token. When it expires, or a call answers `401`, refresh at the same token endpoint. When the refresh fails, the pilot connects again.
-5. To disconnect a pilot, send the refresh token to `https://jetlog.app/oauth/revoke`.
+5. To disconnect a pilot, send the refresh token to `https://jetlog.app/oauth/revoke`. That ends the whole connection. Each time a pilot connects an app, Jetlog emails the pilot about it.
 
 The redirect URI of a phone app is an https link the app has claimed, and the redirect URI of a server is an ordinary https callback. Custom schemes are not accepted. The registration in the console, the metadata document, the PKCE values, phone apps, servers and refresh rules are covered in [MIGRATION.md](MIGRATION.md).
 
@@ -297,7 +297,7 @@ Content-Type: application/json
 Authorization: Bearer <access_token>
 ```
 
-Send at most 200 entries and 1000 people per request, in a body of at most 2 MB, with the `people` those entries refer to. The errors that belong to this route:
+Send at most 200 entries and 1000 people per request, in a JSON body of at most 2 MB, with the `people` those entries refer to. The errors that belong to this route:
 
 | Status | Body | Meaning |
 | :-- | :-- | :-- |
@@ -306,7 +306,7 @@ Send at most 200 entries and 1000 people per request, in a body of at most 2 MB,
 | `403` | `{"error":"insufficient_scope"}` | The token does not carry the `import` scope. |
 | `413` | `{"error":"too_many_entries","max":200}` | More than 200 entries in one request. Nothing is written. |
 | `413` | `{"error":"too_many_people","max":1000}` | More than 1000 people in one request. Nothing is written. |
-| `413` | `{"error":"payload_too_large","max_bytes":2097152}` | The body is larger than 2 MB. It is checked from the `Content-Length` header before anything else. Nothing is written. |
+| `413` | `{"error":"payload_too_large","max_bytes":2097152}` | The body is larger than 2 MB. The limit holds however the body is sent, also without a `Content-Length` header, and it is applied before anything else. Nothing is written. |
 | `429` | `Retry-After` header | Too many requests. Wait that many seconds. |
 
 Entries created through the older key authentication stay the partner's own after it switches to tokens, so a token can amend or delete them.
@@ -314,9 +314,9 @@ Entries created through the older key authentication stay the partner's own afte
 **Behavior**
 - Entry match: per user by `date + flight_number + from + to`; updates or creates accordingly.
 - Required fields: `from` and `to` must be provided for the External Partner API.
-- Soft-delete: `is_deleted: true` deletes only the caller's own external entries. Sending `is_deleted: false` for the same flight restores one you previously deleted.
+- Soft-delete: `is_deleted: true` deletes only the caller's own external entries. Sending `is_deleted: false` for the same flight restores one you previously deleted. A row with `is_deleted: true` that matches no flight the caller added is skipped as `"unknown"` and nothing is written.
 - Re-importing a flight you've soft-deleted: if the row doesn't mention `is_deleted` at all, it is skipped (reason `"deleted"`) rather than silently un-deleting a row this caller can't see. Send `is_deleted: false` to actually restore it.
-- Entries from another source (the app itself, a roster import, another partner) are never modified — they come back as `"duplicate"` in `skipped`. This is about *live* rows only: if that other source's entry is itself soft-deleted, its identity is free — importing the same flight creates a new, live row alongside the deleted one rather than resurrecting or merging into it.
+- Entries from another source (the app itself, a roster import, another partner) are never modified. A row that adds or amends one comes back as `"duplicate"` in `skipped`, and a row with `is_deleted: true` comes back as `"unknown"`. This is about *live* rows only: if that other source's entry is itself soft-deleted, its identity is free — importing the same flight creates a new, live row alongside the deleted one rather than resurrecting or merging into it.
 - People:
   - A submitted person is matched against the people the user already has: first by `employee_number`, otherwise by `first_name` + `last_name` (ignoring case and surrounding whitespace).
   - **A matched person is reused but never modified.** The API will not rename an existing contact, change their `default_role`, or alter their `employee_number` — this includes the user's own profile. Only a person matching nothing is created, using every field supplied.
@@ -327,11 +327,12 @@ Entries created through the older key authentication stay the partner's own afte
 
 #### Skip reasons and warnings — the full list
 
-- `"duplicate"`: entry matches an existing entry from a different source (fields: `date`, `flight_number`, `from`, `to`, `reason`).
+- `"duplicate"`: entry matches an existing entry from a different source (fields: `date`, `flight_number`, `from`, `to`, `reason`). A row with `"is_deleted": true` is never answered this way, see `"unknown"`.
 - `"missing_route"`: entry lacks `from` and `to` (fields: `date`, `flight_number`, `reason`).
 - `"unsupported_type"`: entry `type` is not `"flight"` (fields: `date`, `flight_number`, `type`, `reason`). Nothing is stored for it.
 - `"duplicate_in_payload"`: this same `(date, flight_number, from, to)` identity appears more than once in this payload; the **last** occurrence is imported and the earlier one(s) are reported this way (fields: `date`, `flight_number`, `from`, `to`, `reason`).
 - `"deleted"`: a same-source entry with this identity exists but is soft-deleted, and this row doesn't say anything about `is_deleted` (fields: `date`, `flight_number`, `from`, `to`, `reason`). Send `is_deleted: false` to restore it instead.
+- `"unknown"`: the row has `"is_deleted": true` and matches no flight this caller added (fields: `date`, `flight_number`, `from`, `to`, `reason`). Nothing is written. The answer is the same whether or not the pilot has that flight from another source.
 - `"invalid_field"`: the row failed the same field-level validation a direct write would (an unparsable time, an incomplete `takeoffs_and_landings` pair, ...) — only this row is skipped (fields: `date`, `flight_number`, `reason`, `fields` — an array of the failing field names). A field inside an embedded object like `takeoffs_and_landings` is named with a dot, e.g. `"takeoffs_and_landings.landings"` for a missing landings count — not just `"landings"`.
 
 Warnings: an entry that imports but references a `people[].ref_id` that doesn't resolve to a known person adds one entry to the top-level `"warnings"` array: `{"date", "flight_number", "ref_id", "reason": "unresolved_person_ref"}`. The flight itself still imports, just without that crew member.
@@ -384,14 +385,14 @@ This payload is also deeplink-valid — clicking it opens the same import in the
 {"data": "OK", "skipped": []}
 ```
 
-Full worked examples of every `skipped`/`warnings` shape (all six skip reasons, plus the warnings array) live in EXAMPLES.md's ["Reading the API response"](EXAMPLES.md#reading-the-api-response) — every reason is asserted by the backend test suite.
+Full worked examples of every `skipped`/`warnings` shape (all seven skip reasons, plus the warnings array) live in EXAMPLES.md's ["Reading the API response"](EXAMPLES.md#reading-the-api-response) — every reason is asserted by the backend test suite.
 
 #### Deprecated: key authentication
 
 Partners that integrated before token authentication authenticate with two keys on a separate URL. This still works, and the payload, the behavior and the response are the same as described above. New integrations use tokens, and existing ones move over with [MIGRATION.md](MIGRATION.md).
 
 - Header: `Authorization: Bearer <user_key>:<partner_key>`
-- `user_key`: server-generated when a user enables the external source.
+- `user_key`: server-generated when a user enables the external source. When the pilot uses "Sign Out Everywhere" in the Jetlog app, the pilot's user key is replaced. The old key then answers `401` with `invalid_user_key`, and the pilot has to copy the new key into your app.
 - `partner_key`: issued per integration.
 
 ```
@@ -408,6 +409,8 @@ curl -X POST https://jetlog.app/external/v1/import \
 ```
 
 Responses from this route carry `Deprecation: true` and a `Link` header with `rel="deprecation"` that points to [MIGRATION.md](MIGRATION.md). No cut-off date is set. When one is, it will be announced, responses will also carry a `Sunset` header, and after that moment the route answers `410` with `{"error":"legacy_auth_removed"}`. Entries created with the keys stay owned by the same partner when it switches to tokens.
+
+Requests with a missing or wrong key are limited to 20 per 15 minutes for each IP address. Beyond that the route answers `429` with `{"error":"rate_limited","retry_after":<seconds>}` and a `Retry-After` header. Requests with valid keys are not limited by this. When the pilot's account is scheduled for deletion, the route answers `403` with `{"error":"deletion_scheduled"}` and writes nothing. The same keys work again if the pilot cancels the deletion in the Jetlog app.
 
 ## Tips
 - Keep `ref_id` unique in `people`; reuse in `entries[*].people`.
