@@ -279,16 +279,16 @@ A partner sends the access token a pilot approved: `Authorization: Bearer <acces
 | Own flights | `import` | Add flights, and change or delete the flights the partner created, through the import route below. It cannot read the logbook or change anything else. |
 | Whole logbook | `import read write` | The same, plus reading the logbook and proposing changes to flights and crew members. A proposal changes nothing until the pilot approves it in the Jetlog app. |
 
-The partner asks for `scope=import` or `scope=import read write`, and the `scope` of the token response says what the pilot granted, which can be less than was asked. Jetlog enables the whole logbook level for each partner separately. The read routes, the proposals and all their errors are in [PARTNER_API.md](PARTNER_API.md).
+The partner asks for `scope=import` or `scope=import read write`, and the `scope` of the token response says what the pilot granted, which can be less than was asked. Jetlog enables the whole logbook level for each partner separately, on request in the developer console. The read routes, the proposals and all their errors are in [PARTNER_API.md](PARTNER_API.md).
 
 How a partner gets a token, in short:
-1. Host a metadata document (a small JSON file) on your own domain and send its URL to support@jetlog.app to be registered. The URL is your `client_id`.
+1. Register your app in the developer console at `https://jetlog.app/developers/console`. An overview for developers is at `https://jetlog.app/developers`. You sign in with the email address of a Jetlog account, put the verification value from the console in a metadata document (a small JSON file with the field `jetlog_developer`) on your own domain, and submit the name pilots will see and the address of the document. The address is your `client_id`. Jetlog reviews every app and emails the decision. A partner that already sends flights with the key pair does not register in the console. It writes to support@jetlog.app, and Jetlog links its document to its existing registration.
 2. Send the pilot to `https://jetlog.app/oauth/authorize` with `response_type=code`, your `client_id`, a `redirect_uri` from the document, `scope=import` (or `scope=import read write` to let the pilot choose the whole logbook level), `resource=https://jetlog.app/api/partner/v1`, a `state` and a PKCE S256 `code_challenge`. The pilot approves in the Jetlog app.
 3. Exchange the code at `https://jetlog.app/oauth/token`. The answer holds an access token (valid for 1 hour), a refresh token (valid for 90 days, replaced on every use) and the granted `scope`.
 4. Call the endpoint below with the access token. When it expires, or a call answers `401`, refresh at the same token endpoint. When the refresh fails, the pilot connects again.
 5. To disconnect a pilot, send the refresh token to `https://jetlog.app/oauth/revoke`.
 
-The redirect URI of a phone app is an https link the app has claimed, and the redirect URI of a server is an ordinary https callback. Custom schemes are not accepted. The metadata document, the PKCE values, phone apps, servers and refresh rules are covered in [MIGRATION.md](MIGRATION.md).
+The redirect URI of a phone app is an https link the app has claimed, and the redirect URI of a server is an ordinary https callback. Custom schemes are not accepted. The registration in the console, the metadata document, the PKCE values, phone apps, servers and refresh rules are covered in [MIGRATION.md](MIGRATION.md).
 
 **Endpoint**
 ```

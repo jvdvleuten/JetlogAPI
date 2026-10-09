@@ -1,6 +1,6 @@
 # Partner API reference
 
-This is the reference for everything an app can call once a pilot has connected it to their Jetlog logbook. The [README](README.md) describes the payload of the import route. [MIGRATION.md](MIGRATION.md) covers the connection itself: the metadata document, the authorization request, the token exchange and refreshing. This page covers what a connected app can do with its token, route by route.
+This is the reference for everything an app can call once a pilot has connected it to their Jetlog logbook. The [README](README.md) describes the payload of the import route. [MIGRATION.md](MIGRATION.md) covers registering your app and the connection itself: the developer console, the metadata document, the authorization request, the token exchange and refreshing. This page covers what a connected app can do with its token, route by route.
 
 Words used on this page:
 
@@ -52,7 +52,7 @@ The level is requested with the `scope` parameter of the authorization request, 
 - `scope=import read write` asks for the whole logbook and lets the pilot choose between the two levels.
 - A request that does not contain both `read` and `write` is handled as `import`.
 
-Whether an app may ask for the whole logbook is set by Jetlog for each app. Say that you want it when you send the URL of your metadata document to support@jetlog.app, or write later to have it enabled. For an app that is not enabled, a request for `import read write` is narrowed to `import` without any error. The pilot is offered the own flights level only, and the token response says `"scope": "import"`.
+Whether an app may ask for the whole logbook is set by Jetlog for each app. Once your app is approved, you ask for it on the app's page in the developer console (`https://jetlog.app/developers/console`) with a short reason, and Jetlog decides per app and emails the decision. [MIGRATION.md](MIGRATION.md#2-register-your-app) describes the registration. For an app that is not enabled, a request for `import read write` is narrowed to `import` without any error. The pilot is offered the own flights level only, and the token response says `"scope": "import"`.
 
 An app can therefore receive less than it asked for. The token response tells what was granted, in its `scope` field:
 
@@ -759,7 +759,7 @@ An operation describes one change to one record.
 The rules:
 
 - A proposal has between 1 and 200 operations.
-- Two operations on the same record in one proposal are refused.
+- Two operations on the same record in one proposal are refused, with the `id` message `duplicate entry id <id> within this proposal` (or `duplicate person id <id> within this proposal`). Put every change to one record in one operation.
 - A `create` whose `id` already exists is refused.
 - An `update` or `delete` can only target a flight or a crew member that the read routes can show. A flight that was removed, a simulator session, an id that does not exist and a record of another pilot all answer `entry <id> not found` (or `person <id> not found`).
 - A text value is at most 2000 characters, and every value in `data` is a single value. Only `people` is a list.
@@ -771,7 +771,11 @@ The rules:
 
 ### What a proposal may contain
 
-The pilot reviews a proposal by looking at a before and an after value for everything it would change. So a proposal can only carry fields that the review shows, and it is refused when a field would change nothing the pilot can see. Everything else is refused with a `422` that names the field, and nothing is stored. A key that is not in the lists below is refused too, whatever its name, and it is never ignored silently.
+The pilot reviews a proposal by looking at a before and an after value for everything it would change. So a proposal can only carry fields that the review shows, and one more rule holds: after the change, the logbook must show exactly the value your proposal set. Jetlog compares the two after the usual cleaning, which means the registration is cleaned, airport codes are in capital letters, times are read, text is trimmed, and crew is compared per person and role. When the logbook would show anything else, the proposal is refused. A proposal that repeats a value that is already there is accepted.
+
+Everything that breaks a rule is refused with a `422` that names the field, and nothing is stored. A key that is not in the lists below is refused too, whatever its name, and it is never ignored silently.
+
+Proposing has no effect outside the preview Jetlog keeps for the pilot. The logbook is not changed, and nothing about it is sent to the pilot's devices, until the pilot approves. The only thing the pilot gets before that is the notification about the proposal.
 
 Only two resources can be proposed, `entry` for a flight and `person` for a crew member. A flight is always type `flight`: a create must say `"type": "flight"`, and an update cannot change the type.
 
@@ -809,13 +813,15 @@ Creating a person does not look for an existing one, so read `GET /people` first
 
 ### Flights that Jetlog tracks
 
-While `update_flight_data` is `true` on a flight, Jetlog follows it on its own. The actual times and the registration come from Jetlog's flight feed, and so do the date and the airports once the feed has them. The pilot would see no difference if you changed those, so a proposal for them is refused:
+While `update_flight_data` is `true` on a flight, Jetlog follows it on its own. The actual times and the registration come from Jetlog's flight feed, and so do the date and the airports once the feed has them. The logbook then shows the feed's value, not yours, so a proposal for such a value is refused, unless it is the value the logbook already shows:
 
-- On a tracked flight, `off_blocks`, `airborne`, `touchdown`, `on_blocks` and `registration` cannot be proposed.
-- `date`, `from` and `to` cannot be proposed on a tracked flight once the feed knows them. You can tell by comparing `derived` with the plain fields in the read routes: when `derived.from` is not `from`, the feed decides the route.
-- `flight_number`, `remarks`, `people` and a removal are shown to the pilot whatever the feed does, so they can always be proposed.
-- On a flight that is not tracked, all the fields above can be proposed.
+- On a tracked flight, `off_blocks`, `airborne`, `touchdown`, `on_blocks` and `registration` are decided by the feed. This holds even when the feed has not filled in a registration yet.
+- `date`, `from` and `to` are decided by the feed once it knows them. You can tell by comparing `derived` with the plain fields in the read routes: when `derived.from` is not `from`, the feed decides the route.
+- `flight_number`, `remarks`, `people` and a removal are shown as proposed whatever the feed does, so they can always be proposed.
+- On a flight that is not tracked, all the fields above can be proposed. A mismatch can still happen there. For example the actual airport the pilot logged for a diversion wins over `from` and `to`, so a proposal for those is refused too.
 - A new flight that carries at least one actual time is not tracked, so its times show and can be proposed together with its registration. A new flight without any actual time is tracked, so a `registration` on it is refused. Send the registration through the import route instead.
+
+The message says why. When the flight follows the feed and the key is one the feed decides (`date`, `from`, `to`, `registration`, `off_blocks`, `airborne`, `touchdown`, `on_blocks`), it names the feed. Every other mismatch gets the same message without the feed.
 
 ### What cannot be proposed
 
@@ -828,10 +834,11 @@ The answer is the nested `422` body of [Errors per route](#errors-per-route), wi
 | `field` | `message` |
 | :-- | :-- |
 | The key itself, for example `manual_times` | `connected apps cannot propose manual_times` |
-| The key itself, for example `off_blocks` | `off_blocks would change nothing you can see in the logbook for this flight (it follows the flight feed), so connected apps cannot propose it` |
+| The key itself, for example `off_blocks`, when the flight follows the flight feed | `Jetlog would show a different value than the one proposed for this flight, because the flight follows the flight feed, so connected apps cannot propose it` |
+| The key itself, for any other mismatch | `Jetlog would show a different value than the one proposed for this flight, so connected apps cannot propose it`. For a person the word `flight` is `person`. |
 | `type` | `connected apps can only add flights (type "flight")`, or `connected apps can only change flights (type "flight")` on an update |
 | `resource` | `connected apps cannot propose changes to aircraft`, and the same for `fstd` |
-| `id` | `entry <id> not found`, or `person <id> not found` |
+| `id` | `entry <id> not found`, or `person <id> not found`, and `duplicate entry id <id> within this proposal` when two operations name one record |
 | `people` | `at most 20 crew members per flight`, `each crew member is an object with person_id and role`, or `must be a list of crew members` |
 | The key itself, for example `remarks` | `must be a single value` |
 
@@ -997,7 +1004,7 @@ A `422` lists what is wrong in `errors`. Each item has the `index` of the operat
 }
 ```
 
-A proposal that uses a field outside the lists, or a field that the pilot could not see change, is refused like this. Every problem gets its own item, so one request can show several:
+A proposal that uses a field outside the lists, or a value that the logbook would not show as proposed, is refused like this. Every problem gets its own item, so one request can show several:
 
 ```json
 {
@@ -1005,7 +1012,7 @@ A proposal that uses a field outside the lists, or a field that the pilot could 
     "message": "Invalid operations",
     "errors": [
       {"index": 0, "field": "manual_times", "message": "connected apps cannot propose manual_times"},
-      {"index": 0, "field": "off_blocks", "message": "off_blocks would change nothing you can see in the logbook for this flight (it follows the flight feed), so connected apps cannot propose it"}
+      {"index": 0, "field": "off_blocks", "message": "Jetlog would show a different value than the one proposed for this flight, because the flight follows the flight feed, so connected apps cannot propose it"}
     ]
   }
 }
@@ -1046,10 +1053,10 @@ At either level, an app cannot:
 - call anything outside the routes in this document. A partner token is refused everywhere else.
 - act without the pilot. Every connection is made by a pilot approving it, and the pilot can remove it at any time.
 - read proposals that another connection made.
-- propose a change to anything but flights and crew members, or to a field the pilot would not see change.
+- propose a change to anything but flights and crew members, or one that the logbook would not show as proposed.
 
 At the own flights level an app also cannot read the logbook or propose changes. At the whole logbook level it still cannot change a flight it did not add without the pilot approving that change.
 
 ## The sample app
 
-The [Jetlog sample app](https://github.com/jvdvleuten/jetlog-sample-app) is a small web app that runs the whole flow against a pilot's own account. It sends the authorization request, receives the callback, exchanges the code, reads the logbook and proposes a change, and then follows the proposal until the pilot has decided. It is registered as a partner itself, so you can run it with your own account before your own app is registered, and read its code as a starting point. It needs the Jetlog app on an iPhone or iPad with a logbook, to approve the connection in.
+The [Jetlog sample app](https://github.com/jvdvleuten/jetlog-sample-app) is a small web app that runs the whole flow against a pilot's own account. It sends the authorization request, receives the callback, exchanges the code, reads the logbook and proposes a change, and then follows the proposal until the pilot has decided. Jetlog registered it itself, with the whole logbook level enabled, so you can run it as it is with your own account before your own app is registered, and read its code as a starting point. Its document needs no `jetlog_developer` field because Jetlog registered it. Your own document does, see [MIGRATION.md](MIGRATION.md#2-register-your-app). The sample needs the Jetlog app on an iPhone or iPad with a logbook, to approve the connection in.

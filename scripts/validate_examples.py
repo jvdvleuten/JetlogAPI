@@ -355,6 +355,10 @@ def check_migration() -> None:
     if document is None:
         fail(MIGRATION, "no metadata document example found")
         return None
+    # The verification value of the developer console: `jld_` and 26 lowercase base32
+    # characters. It is not a secret, so the example shows a value shaped like a real one.
+    if not re.fullmatch(r"jld_[a-z2-7]{26}", str(document.get("jetlog_developer", ""))):
+        fail(f"{MIGRATION} metadata document", "`jetlog_developer` must be present and shaped like jld_ plus 26 lowercase base32 characters")
     client_id = document.get("client_id", "")
     name = document.get("client_name", "")
     uris = document.get("redirect_uris", [])
@@ -419,7 +423,9 @@ BODY_LIMITS = {"POST /changes": 262144, "POST /import": 2097152}
 # Messages of the 422 refusals, as templates.
 REFUSAL_TEMPLATES = [
     "connected apps cannot propose {key}",
-    "{key} would change nothing you can see in the logbook for this flight (it follows the flight feed), so connected apps cannot propose it",
+    "Jetlog would show a different value than the one proposed for this flight, because the flight follows the flight feed, so connected apps cannot propose it",
+    "Jetlog would show a different value than the one proposed for this flight, so connected apps cannot propose it",
+    "duplicate entry id",
     'connected apps can only add flights (type "flight")',
     'connected apps can only change flights (type "flight")',
     "connected apps cannot propose changes to {resource}",
@@ -430,7 +436,9 @@ REFUSAL_TEMPLATES = [
 ]
 REFUSAL_PATTERNS = [
     re.compile(r"connected apps cannot propose \w+"),
-    re.compile(r"\w+ would change nothing you can see in the logbook for this (flight|person) \(it follows the flight feed\), so connected apps cannot propose it"),
+    re.compile(r"Jetlog would show a different value than the one proposed for this (flight|person), because the flight follows the flight feed, so connected apps cannot propose it"),
+    re.compile(r"Jetlog would show a different value than the one proposed for this (flight|person), so connected apps cannot propose it"),
+    re.compile(r"duplicate (entry|person) id [0-9a-f-]{36} within this proposal"),
     re.compile(r'connected apps can only (add|change) flights \(type "flight"\)'),
     re.compile(r"connected apps cannot propose changes to \w+"),
     re.compile(r"at most 20 crew members per flight"),
@@ -956,6 +964,8 @@ def check_partner_api(document: dict | None) -> None:
             fail(where, f"the limits table must contain {needle!r}")
     if re.search(r"per pilot", limits) or "20 open" in text or "20 open proposals" in text:
         fail(where, "open proposals are limited per connection to 5, not per pilot to 20")
+    if "would change nothing you can see" in text:
+        fail(where, "the refusal 'would change nothing you can see' no longer exists, a value is refused when the logbook would show another one")
     for template in REFUSAL_TEMPLATES:
         needle = template.replace("{key}", "").replace("{resource}", "")
         if needle.strip() and needle.split("{")[0].strip() not in text:
@@ -994,9 +1004,33 @@ def check_partner_api(document: dict | None) -> None:
                     fail(f"{where} sh block at offset {sh.start()}", f"{key}={value} does not match MIGRATION.md / the two levels")
 
 
+def check_registration() -> None:
+    """A new app registers in the developer console. Mailing the URL of a metadata
+    document is only right for a partner that already uses the key pair, and no document
+    calls an app or its host verified."""
+    for name in DOCS + [MIGRATION, PARTNER]:
+        text = (ROOT / name).read_text()
+        if re.search(r"\b(send|email|mail)\b[^.\n]{0,100}\b(URL|address)\b[^.\n]{0,100}support@jetlog\.app", text, re.I):
+            fail(name, "tells a developer to mail the URL of the metadata document to support@jetlog.app; a new app registers in the developer console")
+        if re.search(r"say so in the (same )?email", text, re.I):
+            fail(name, "whole-logbook access is requested in the developer console, not by email")
+        if re.search(r"\bverified\b", text, re.I):
+            fail(name, "no document calls an app or its host verified (an app is registered with Jetlog under its name)")
+    for name in (ROOT / "README.md", ROOT / MIGRATION, ROOT / PARTNER):
+        if "https://jetlog.app/developers/console" not in name.read_text():
+            fail(name.name, "must point to the developer console, https://jetlog.app/developers/console")
+    migration = (ROOT / MIGRATION).read_text()
+    for needle in ("https://jetlog.app/developers", "jetlog_developer", "Registered with Jetlog under this name", "already uses the key pair"):
+        if needle not in migration:
+            fail(MIGRATION, f"the registration step must mention {needle!r}")
+    if not re.search(r"existing[^.\n]{0,80}registration", migration):
+        fail(MIGRATION, "a key pair partner asks Jetlog to link its document to its existing registration, and the guide must say so")
+
+
 for name in DOCS + [MIGRATION, PARTNER]:
     doc_text = (ROOT / name).read_text()
     check_auth_blocks(name, doc_text, headings_of(doc_text))
+check_registration()
 check_partner_api(check_migration())
 check_anchors()
 

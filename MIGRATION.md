@@ -1,6 +1,6 @@
 # Moving to token authentication
 
-This guide is for partners that send flights to Jetlog with the key pair, `Authorization: Bearer <user_key>:<partner_key>` on `/external/v1/import`. It is also the complete description of the token flow for a partner that starts from scratch. It uses the own flights level, which gives the access the key pair gives. The wider level, with reading and proposals, is described in [PARTNER_API.md](PARTNER_API.md).
+This guide is for partners that send flights to Jetlog with the key pair, `Authorization: Bearer <user_key>:<partner_key>` on `/external/v1/import`. It is also the complete description of the token flow for an app that starts from scratch. A new app registers in the developer console (step 2), and a partner that already uses the key pair does not: it asks Jetlog to link its metadata document to its existing registration. This guide uses the own flights level, which gives the access the key pair gives. The wider level, with reading and proposals, is described in [PARTNER_API.md](PARTNER_API.md).
 
 Words used in this guide:
 
@@ -62,7 +62,7 @@ A pilot approves a partner at one of two levels. A request with `scope=import` g
 
 The wider level is optional. It is called whole logbook, and a partner asks for it with `scope=import read write`. It adds reading the logbook and proposing changes that the pilot approves in the Jetlog app. Three things to know before asking for it:
 
-- Jetlog enables it for each partner separately. Say so in the email of [step 2](#2-register-the-url). A partner that is not enabled gets the own flights level, whatever it asks for, and no error.
+- Jetlog enables it for each app separately. A new app asks for it on its own page in the developer console once it is approved, see [step 2](#2-register-your-app). A partner that is not enabled gets the own flights level, whatever it asks for, and no error.
 - The pilot chooses the level when approving, so a partner can receive less than it asked for. The `scope` in the token response says what was granted.
 - A partner that gets `scope=import` back works exactly as described in this guide.
 
@@ -73,7 +73,7 @@ The routes, the proposals and their errors are in [PARTNER_API.md](PARTNER_API.m
 In order:
 
 1. Host a metadata document on your own domain.
-2. Send its URL to Jetlog to be registered.
+2. Register your app in the developer console, or, for a partner that already uses the key pair, have Jetlog link the document to your existing registration.
 3. Send the pilot to Jetlog with an authorization request (authorization code with PKCE).
 4. Receive the callback.
 5. Exchange the code for tokens.
@@ -104,6 +104,7 @@ The metadata document is a JSON file served from your own domain. Its URL is you
 {
   "client_id": "https://partner.example.com/jetlog-client.json",
   "client_name": "Example Partner",
+  "jetlog_developer": "jld_m4zq7vtn2xkc5hbdr3wypfa6e7",
   "client_uri": "https://partner.example.com",
   "logo_uri": "https://partner.example.com/assets/logo-256.png",
   "redirect_uris": [
@@ -120,19 +121,40 @@ The rules:
 - The response is a JSON object of at most 64 KB and arrives within a few seconds (the whole fetch is cut off after 5 seconds).
 - The host resolves to public addresses. A host that resolves to a private, loopback or link-local address is refused.
 - `client_id` is required and equals the URL the document is served from, character for character.
-- `client_name` is required. It is at most 64 characters of printable ASCII, with no control characters. Pilots see the name Jetlog registered for you in step 2, so use the same name here.
+- `client_name` is required. It is at most 64 characters of printable ASCII, with no control characters. Pilots see the name you register in step 2, which can differ from this one, so use the same name here.
+- `jetlog_developer` is the verification value that the developer console shows you, a top-level string that starts with `jld_`. An app registered in the console must carry it. It is the same for every app of one developer. It is not a secret and not a key. It only shows that the document is yours, so it is fine that it sits in a public file. A partner that already uses the key pair and has its document linked by Jetlog does not need it.
 - `redirect_uris` is required and lists at least one URI of at most 255 characters. Every URI is `https://`. Plain `http://` is accepted only for `127.0.0.1`, `localhost` and `[::1]`, which is meant for development on your own computer. Custom schemes such as `partner://callback` are not accepted. See [A phone app](#a-phone-app) for why.
 - `client_uri`, `logo_uri` and `software_id` are optional, at most 255 characters each. Other fields are ignored.
 
-Jetlog keeps a copy of the document for 24 hours. After that it fetches the document again the next time an authorization request arrives. When that fetch fails, Jetlog keeps using the copy it has. Publish a change, such as a new redirect URI, at least a day before you rely on it, and keep the document available.
+Jetlog keeps a copy of the document for 24 hours. After that it fetches the document again the next time an authorization request arrives. When that fetch fails, Jetlog keeps using the copy it has. Publish a change at least a day before you rely on it, and keep the document available. A new or changed redirect URI also needs Jetlog's approval before it works, see [step 2](#2-register-your-app).
 
 Put one redirect URI in the document for each place a pilot can come back to: one for the phone app, one for the server, or both.
 
-### 2. Register the URL
+### 2. Register your app
 
-Email the URL of your metadata document to support@jetlog.app, together with the name pilots should see for your partner. If your app is going to ask for the whole logbook level, say so in the same email. Jetlog links the URL to your existing partner registration, which is why flights you created with the keys stay yours. Jetlog tells you when it is done.
+**A new app registers in the developer console.** The page for developers is `https://jetlog.app/developers` and the console is `https://jetlog.app/developers/console`.
 
-Until then an authorization request for your URL comes back to your callback with `error=unauthorized_client`, and no token is issued. If Jetlog ever disables a partner registration, the token route answers `403` with `integration_disabled` and a refresh answers `unauthorized_client`. Keep the tokens you hold. They work again when the registration is enabled.
+1. Sign in to the console with the email address of your Jetlog account. Jetlog mails you a code. You need a Jetlog account for this, and the console does not create one.
+2. The console shows your verification value, which starts with `jld_`. Put it in your metadata document as the top-level field `jetlog_developer`, as in the example in [step 1](#1-host-the-metadata-document). The value is the same for every app you register. It is not a secret and not a key.
+3. Fill in the registration form with the name pilots will see for your app and the address of your metadata document, which is your `client_id`. The name is 2 to 64 printable ASCII characters. It cannot contain "Jetlog", also not with spaces or look-alike letters, it cannot contain `/`, `:`, `@`, `<` or `>`, it cannot start with `www.`, and it has to be a name no other approved app uses.
+4. Press "Check document". Jetlog fetches the document, checks it by the rules of step 1 and checks your verification value, and lists every problem in plain words. Submitting runs the same check again.
+5. Submit the registration. From then on the name and the address cannot be changed. To change them, register a new app, or write to support@jetlog.app.
+
+Jetlog reviews every app. It fetches your document again before approving, so the document must still carry your verification value then. You get an email with the decision. Until your app is approved, an authorization request for it comes back to your callback with `error=unauthorized_client`, and no token is issued. If your app is not approved, its page in the console shows a note with the reason.
+
+The redirect URIs in the document at the moment of approval are the approved ones. A redirect URI that you add or change later does not work until Jetlog has approved it. Write to support@jetlog.app for that. An authorization request with a redirect URI that is not approved gets the Jetlog error page, like any other redirect URI that is not in the document.
+
+When your app needs the whole logbook level, ask for it on the app's page in the console once the app is approved. Give a short reason, 10 to 500 characters, that says which data you read and why. Jetlog decides per app and emails the decision. The page shows the result. Without it, your app gets the own flights level.
+
+The app's page in the console shows the status of the review, the approved redirect URIs, which access is enabled, how many pilots have connected the app (a count, never who), the requests of the last 30 days per day split into import, read and changes, the errors your app got, and how often the rate limit stopped it. The statistics start once pilots use the app.
+
+Limits: you can have at most 5 apps, rejected ones not counted, and submit at most 5 registrations in 24 hours, withdrawn and rejected ones included. A registration that is still in review can be withdrawn on its page.
+
+A pilot who approves your app in the Jetlog app sees the name you registered with the text "Registered with Jetlog under this name", and the host of your metadata document as a plain detail.
+
+**A partner that already uses the key pair does not register in the console.** Write to support@jetlog.app with the address of your metadata document, and Jetlog links that address to your existing partner registration. This is why flights you created with the keys stay yours. Jetlog tells you when it is done. For a linked document the `jetlog_developer` field is not needed.
+
+If Jetlog ever disables a partner registration, the token route answers `403` with `integration_disabled` and a refresh answers `unauthorized_client`. Keep the tokens you hold. They work again when the registration is enabled.
 
 ### 3. Build the authorization request
 
@@ -391,7 +413,7 @@ On the authorization and token endpoints:
 | Where | What you get | Meaning |
 | :-- | :-- | :-- |
 | Authorization, browser shows a Jetlog error page | No redirect to your callback | Jetlog could not trust the request: the metadata document is unreachable or invalid, `redirect_uri` is not in the document, or a required parameter is missing |
-| Authorization, redirect with `error=unauthorized_client` | Your metadata document URL is not registered with Jetlog, or the registration is disabled | Register the URL (step 2), or email support@jetlog.app |
+| Authorization, redirect with `error=unauthorized_client` | Your app is not approved yet, was not approved, or its registration is disabled. A key pair partner whose document is not linked yet gets this too | Check the status on the app's page in the developer console (step 2). A key pair partner writes to support@jetlog.app |
 | Authorization, redirect with `error=access_denied` | The pilot declined or cancelled | Show that nothing was connected |
 | Authorization, redirect with `error=invalid_request`, `unsupported_response_type` or `invalid_target` | A parameter is wrong | `code_challenge_method` has to be `S256`, `response_type` has to be `code`, `resource` has to be `https://jetlog.app/api/partner/v1` |
 | Token, `400` `{"error":"invalid_grant"}` on a code | The code expired (60 seconds), was already used, or something does not match: `client_id`, `redirect_uri`, `code_verifier` or `resource` | Start the authorization again |
@@ -429,7 +451,8 @@ You can repeat the same payload on the token route that you sent on the key rout
 
 - [ ] The metadata document is served over https, answers `200` without redirects, and its `client_id` equals its own URL.
 - [ ] `client_name` is printable ASCII of at most 64 characters, and every redirect URI is https.
-- [ ] The URL is sent to support@jetlog.app and confirmed as registered.
+- [ ] The app is registered in the developer console and approved, and the document carries the `jetlog_developer` value. A key pair partner has its document linked by Jetlog.
+- [ ] A new or changed redirect URI is approved by Jetlog before it is used.
 - [ ] Every authorization request has a fresh `state` and a fresh S256 code challenge, and carries the `scope` your app needs (`import` for the access of the key pair) and `resource=https://jetlog.app/api/partner/v1`.
 - [ ] The callback checks `state` and `iss`, and handles `error=access_denied`.
 - [ ] The code is exchanged within 60 seconds, with the same `redirect_uri` and the stored verifier.
