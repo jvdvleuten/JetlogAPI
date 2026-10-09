@@ -1,6 +1,6 @@
 # Moving to token authentication
 
-This guide is for partners that send flights to Jetlog with the key pair, `Authorization: Bearer <user_key>:<partner_key>` on `/external/v1/import`. It is also the complete description of the token flow for an app that starts from scratch. A new app registers in the developer console (step 2), and a partner that already uses the key pair does not: it asks Jetlog to link its metadata document to its existing registration. This guide uses the own flights level, which gives the access the key pair gives. The wider level, with reading and proposals, is described in [PARTNER_API.md](PARTNER_API.md).
+This guide is for partners that send flights to Jetlog with the key pair, `Authorization: Bearer <user_key>:<partner_key>` on `/external/v1/import`. It is also the complete description of the token flow for an app that starts from scratch. A new app registers in the developer console (step 1), and a partner that already uses the key pair does not: it asks Jetlog to link its metadata document to its existing registration. This guide uses the own flights level, which gives the access the key pair gives. The wider level, with reading and proposals, is described in [PARTNER_API.md](PARTNER_API.md).
 
 Words used in this guide:
 
@@ -51,7 +51,7 @@ Sections:
 | Header | `Authorization: Bearer <user_key>:<partner_key>` | `Authorization: Bearer <access_token>` |
 | How a pilot connects | The pilot enables the external source in Jetlog and hands the user key to the partner | The partner starts an authorization request and the pilot approves it in the Jetlog app |
 | What the partner stores | One partner key for all pilots, one user key per pilot | No shared secret. One refresh token per pilot |
-| Lifetime | Neither key expires | Access token 1 hour. Refresh token 90 days, replaced on every use |
+| Lifetime | Neither key expires | Access token 1 hour. Refresh token 90 days. An app with a client secret keeps the same refresh token, an app without one gets a new one on every use |
 | When the pilot signs out everywhere | The user key is replaced and the pilot copies the new key into your app | The connection ends and the pilot approves your app again in the Jetlog app |
 | What it may do | Add flights, change and delete the flights the partner created | The same with `scope=import`. A wider level is optional, see [Access levels](#access-levels) |
 | Requests | No cap documented | At most 200 entries, 1000 people and 2 MB |
@@ -64,7 +64,7 @@ A pilot approves a partner at one of two levels. A request with `scope=import` g
 
 The wider level is optional. It is called whole logbook, and a partner asks for it with `scope=import read write`. It adds reading the logbook and proposing changes that the pilot approves in the Jetlog app. Three things to know before asking for it:
 
-- It is available only to an app that has all of these: the access switched on by Jetlog, a client secret, approved redirect addresses, and no loopback address (`localhost`, `127.0.0.1` or `[::1]`) among them. A new app asks for the access on its own page in the developer console once it is approved, and generates its client secret on the same page, see [step 2](#2-register-your-app). An app that runs on the pilot's own computer therefore works at the own flights level. An app that does not meet these gets the own flights level, whatever it asks for, and no error.
+- It is available only to an app that has all of these: the access switched on by Jetlog, a client secret, approved redirect addresses, and no loopback address (`localhost`, `127.0.0.1` or `[::1]`) among them. A new app asks for the access on its own page in the developer console once it is approved, and generates its client secret on the same page, see [step 2](#2-review-development-and-the-client-secret). An app that runs on the pilot's own computer therefore works at the own flights level. An app that does not meet these gets the own flights level, whatever it asks for, and no error. While an app is waiting for review, its developer's own account can use the whole logbook level without Jetlog's switch and without approved addresses, as long as the app has a client secret and no loopback address, see [step 2](#2-review-development-and-the-client-secret).
 - The pilot chooses the level when approving, so a partner can receive less than it asked for. The `scope` in the token response says what was granted.
 - A partner that gets `scope=import` back works exactly as described in this guide.
 
@@ -74,8 +74,8 @@ The routes, the proposals and their errors are in [PARTNER_API.md](PARTNER_API.m
 
 In order:
 
-1. Host a metadata document on your own domain.
-2. Register your app in the developer console, or, for a partner that already uses the key pair, have Jetlog link the document to your existing registration.
+1. Register your app in the developer console, with a form or with a metadata document on your own domain. A partner that already uses the key pair has Jetlog link its document to its existing registration instead.
+2. Build and test while Jetlog reviews the app, and set up the client secret and the redirect addresses.
 3. Send the pilot to Jetlog with an authorization request (authorization code with PKCE).
 4. Receive the callback.
 5. Exchange the code for tokens.
@@ -96,11 +96,34 @@ These endpoints are also listed in the standard discovery document at `https://j
 
 Two fixed values appear in every request below. The **scope** is `import`, which gives the access of the key pair. The **resource** is `https://jetlog.app/api/partner/v1`, which names the token route as the place the token is meant for. A token that was issued for another resource is refused on the token route.
 
-Your identity is the URL of your metadata document, and PKCE protects the authorization code. An app can also have a client secret, which its developer generates in the developer console, see [step 2](#2-register-your-app). An app without a secret works exactly as described in this guide.
+Your identity is your `client_id`: the app id the console gave you, or, for an app registered with a metadata document, the URL of that document. PKCE protects the authorization code. An app can also have a client secret, which its developer generates in the developer console, see [step 2](#2-review-development-and-the-client-secret). An app without a secret works exactly as described in this guide.
 
-### 1. Host the metadata document
+The examples below show the URL of the example metadata document as `client_id`. An app registered with the form puts its app id there, and everything else in the examples stays the same.
 
-The metadata document is a JSON file served from your own domain. Its URL is your `client_id`. Jetlog fetches it to learn your name and the redirect URIs you use.
+### 1. Register your app
+
+A new app registers in the developer console. The page for developers is `https://jetlog.app/developers` and the console is `https://jetlog.app/developers/console`. You need a Jetlog account for this, and the console does not create one. The console signs you in with the Jetlog app: it shows a QR code and a number, and you approve the sign-in in the app. Without the app at hand you can choose email instead, and Jetlog mails a code to the address of your account.
+
+There are two ways to register, and both give the same kind of app. The form is the simplest, and nothing has to be hosted. The metadata document is for developers who prefer to describe the app in a file on their own domain.
+
+#### With a form
+
+The form asks for two things:
+
+- The name pilots will see for your app. The name is 2 to 64 printable ASCII characters. It cannot read as "Jetlog", also not with spaces, dashes or look-alike letters, it cannot contain `/`, `:`, `@`, `<` or `>`, it cannot start with `www.`, and it has to be a name no other approved app uses.
+- The redirect addresses, one on each line. These are the places where Jetlog sends the pilot back to your app. Give at least 1 and at most 10, none twice. Every address is `https://` and at most 255 characters. Plain `http://` is accepted only for `127.0.0.1`, `localhost` and `[::1]`, which is meant for development on your own computer. Custom schemes such as `partner://callback` are not accepted. See [A phone app](#a-phone-app) for why. Each address is a plain address with an ordinary ASCII host name: no backslash, no `user@` part or `%` in the host, no spaces, and no `#` fragment.
+
+Submit the form. The console answers with the page of your app, which shows its **app id**. The app id is your `client_id`. Copy it from that page into your app and use it in every request below. It looks like this:
+
+```
+jetlog_app_VUGENuUg7Q6UL-CGr67N8aEz5Q_ZvwfKxWeBYz0Bd9s
+```
+
+Jetlog generates the app id, so you do not choose it. The name cannot be changed after submitting. To change it, register a new app, or write to support@jetlog.app. The redirect addresses can be changed on the app's page, see [step 2](#2-review-development-and-the-client-secret).
+
+#### With a metadata document
+
+Instead of the form you can describe your app in a metadata document, a JSON file served from your own domain. Its URL is your `client_id`. Jetlog fetches it to learn your name and the redirect URIs you use.
 
 ```json
 {
@@ -123,40 +146,45 @@ The rules:
 - The response is a JSON object of at most 64 KB and arrives within a few seconds (the whole fetch is cut off after 5 seconds).
 - The host resolves to public addresses. A host that resolves to a private, loopback or link-local address is refused.
 - `client_id` is required and equals the URL the document is served from, character for character.
-- `client_name` is required. It is at most 64 characters of printable ASCII, with no control characters. It cannot read as "Jetlog": not in any letter case, and not with spaces, dashes, a digit or a capital I in place of a letter. Pilots see the name you register in step 2, which can differ from this one, so use the same name here.
-- `jetlog_developer` is the verification value that the developer console shows you, a top-level string that starts with `jld_`. An app registered in the console must carry it. It is the same for every app of one developer. It is not a secret and not a key. It only shows that the document is yours, so it is fine that it sits in a public file. A partner that already uses the key pair and has its document linked by Jetlog does not need it.
+- `client_name` is required. It is at most 64 characters of printable ASCII, with no control characters. It cannot read as "Jetlog": not in any letter case, and not with spaces, dashes, a digit or a capital I in place of a letter. Pilots see the name you register, which can differ from this one, so use the same name here.
+- `jetlog_developer` is the verification value that the developer console shows you, a top-level string that starts with `jld_`. An app registered in the console with a document must carry it. It is the same for every app of one developer. It is not a secret and not a key. It only shows that the document is yours, so it is fine that it sits in a public file. A partner that already uses the key pair and has its document linked by Jetlog does not need it.
 - `redirect_uris` is required and lists at least one URI of at most 255 characters. Every URI is `https://`. Plain `http://` is accepted only for `127.0.0.1`, `localhost` and `[::1]`, which is meant for development on your own computer. Custom schemes such as `partner://callback` are not accepted. See [A phone app](#a-phone-app) for why. Each URI is a plain address with an ordinary ASCII host name: no backslash, no `user@` part or `%` in the host, no spaces, and no `#` fragment.
 - `client_uri`, `logo_uri` and `software_id` are optional, at most 255 characters each. Other fields are ignored.
 
-Jetlog keeps a copy of the document for 24 hours. After that it fetches the document again the next time an authorization request arrives. When that fetch fails, Jetlog keeps using the copy it has. Publish a change at least a day before you rely on it, and keep the document available. A new or changed redirect URI also needs Jetlog's approval before it works, see [step 2](#2-register-your-app).
+Jetlog keeps a copy of the document for 24 hours. After that it fetches the document again the next time an authorization request arrives. When that fetch fails, Jetlog keeps using the copy it has. Publish a change at least a day before you rely on it, and keep the document available. A new or changed redirect URI also needs Jetlog's approval before it works, see [step 2](#2-review-development-and-the-client-secret).
 
 Put one redirect URI in the document for each place a pilot can come back to: one for the phone app, one for the server, or both.
 
-### 2. Register your app
+To register the document:
 
-**A new app registers in the developer console.** The page for developers is `https://jetlog.app/developers` and the console is `https://jetlog.app/developers/console`.
+1. The console shows your verification value, which starts with `jld_`. Put it in your metadata document as the top-level field `jetlog_developer`, as in the example above. The value is the same for every app you register. It is not a secret and not a key.
+2. Fill in the second registration form on the page, the one under "Or host a metadata document". Give the name pilots will see for your app, with the same rules as in the form above, and the address of your metadata document, which is your `client_id`.
+3. Press "Check document". Jetlog fetches the document, checks it by the rules above and checks your verification value, and lists every problem in plain words. Submitting runs the same check again.
+4. Submit the registration. From then on the name and the address cannot be changed. To change them, register a new app, or write to support@jetlog.app.
 
-1. Sign in to the console with the email address of your Jetlog account. Jetlog mails you a code. You need a Jetlog account for this, and the console does not create one.
-2. The console shows your verification value, which starts with `jld_`. Put it in your metadata document as the top-level field `jetlog_developer`, as in the example in [step 1](#1-host-the-metadata-document). The value is the same for every app you register. It is not a secret and not a key.
-3. Fill in the registration form with the name pilots will see for your app and the address of your metadata document, which is your `client_id`. The name is 2 to 64 printable ASCII characters. It cannot read as "Jetlog", also not with spaces, dashes or look-alike letters, it cannot contain `/`, `:`, `@`, `<` or `>`, it cannot start with `www.`, and it has to be a name no other approved app uses.
-4. Press "Check document". Jetlog fetches the document, checks it by the rules of step 1 and checks your verification value, and lists every problem in plain words. Submitting runs the same check again.
-5. Submit the registration. From then on the name and the address cannot be changed. To change them, register a new app, or write to support@jetlog.app.
-
-Jetlog reviews every app. It fetches your document again before approving, so the document must still carry your verification value then. You get an email with the decision. Until your app is approved, an authorization request for it shows the pilot a Jetlog error page with `unauthorized_client`, and no token is issued. If your app is not approved, its page in the console shows a note with the reason.
-
-The redirect URIs in the document at the moment of approval are the approved ones. A redirect URI that you add or change later does not work until Jetlog has approved it. Write to support@jetlog.app for that. An authorization request with a redirect URI that is not approved gets the Jetlog error page, like any other redirect URI that is not in the document.
-
-When your app needs the whole logbook level, ask for it on the app's page in the console once the app is approved. Give a short reason, 10 to 500 characters, that says which data you read and why. Jetlog decides per app and emails the decision. The page shows the result. Without it, your app gets the own flights level. When the access is switched on but cannot be used yet, the page says why: no client secret is set, no redirect addresses are approved, or an approved redirect address is a loopback address.
-
-**The client secret.** An approved app has a button on its page in the console to generate a client secret. Jetlog shows the secret once, so copy it then and keep it on your server, never in a mobile app or a web page. Generating a new secret replaces the old one at once, Jetlog emails you each time, and you can generate one at most 5 times a day. From the moment an app has a secret, every request to the token endpoint for it must carry the secret as `client_secret` in the body, for the code exchange and for every refresh, see [step 5](#5-exchange-the-code). The whole logbook level needs a secret. An app without one works as described in this guide.
-
-The app's page in the console shows the status of the review, the approved redirect URIs, which access is enabled, how many pilots have connected the app (a count, never who), the requests of the last 30 days per day split into import, read and changes, the errors your app got, and how often the rate limit stopped it. The statistics start once pilots use the app.
+**A partner that already uses the key pair does not register in the console.** Write to support@jetlog.app with the address of your metadata document, and Jetlog links that address to your existing partner registration. This is why flights you created with the keys stay yours. Jetlog tells you when it is done. For a linked document the `jetlog_developer` field is not needed.
 
 Limits: you can have at most 5 apps, rejected ones not counted, and submit at most 5 registrations in 24 hours, withdrawn and rejected ones included. A registration that is still in review can be withdrawn on its page.
 
-A pilot who approves your app in the Jetlog app sees the name you registered with the text "Registered with Jetlog under this name", and the host of your metadata document as a plain detail.
+### 2. Review, development and the client secret
 
-**A partner that already uses the key pair does not register in the console.** Write to support@jetlog.app with the address of your metadata document, and Jetlog links that address to your existing partner registration. This is why flights you created with the keys stay yours. Jetlog tells you when it is done. For a linked document the `jetlog_developer` field is not needed.
+Jetlog reviews every app and you get an email with the decision. Jetlog approves the name and the redirect addresses it sees at that moment: for an app registered with the form the ones on the app's page, and for an app registered with a document the redirect URIs in the document, which Jetlog fetches again before approving, so the document must still carry your verification value then. If your app is not approved, its page in the console shows a note with the reason.
+
+**Building before approval.** An app that is waiting for review already works for your own Jetlog account, so you can build and test straight away. Use your `client_id` and one of your redirect addresses in the authorization request of [step 3](#3-build-the-authorization-request) and go through the steps below as any app does. The Jetlog sign-in pages say that the app is in development and has not been reviewed. The flights your app sends are written to your own logbook like any other. A pilot who is not you cannot connect the app until Jetlog has approved it, and nothing is issued for that pilot. Until the redirect addresses are approved, the addresses of the app, on its page in the console or in its document, are the ones it can use, for your account only. When Jetlog approves the app, the connections you made keep working with the same tokens, and any pilot can connect it. When Jetlog rejects the app, or you withdraw it, your test connections stop with the next request.
+
+You can also try the whole logbook level in development, without waiting for Jetlog to switch it on. It needs a client secret, which you can generate while the app is waiting, and no loopback address among the redirect addresses. The own flights level has no such conditions.
+
+**Changing the redirect addresses.** For an app registered with the form, change the addresses on the app's page in the console, with the same rules as when registering. For an approved app, a new address works once Jetlog has approved it, and Jetlog is told when you save. An address you remove stops working at once. You can save changes up to 20 times a day for each app. An app registered with a document changes its addresses in the document instead, and writes to support@jetlog.app to have a new or changed address approved. An authorization request with a redirect URI that is not approved gets the Jetlog error page, like any other redirect URI that is not listed for the app.
+
+**Confirming a change.** Generating a client secret and changing the redirect addresses ask for a confirmation first, because either one decides who can act as your app, and nobody who borrows your signed-in browser should be able to do that. The sections for the secret and the addresses on the app's page show a button, "Confirm with an emailed code to make changes". Jetlog mails a code to the email address of your Jetlog account, never to another address. The code is valid for 10 minutes. After you enter it, the secret and the addresses can be changed for 10 minutes. Signing in to the console does not count as a confirmation.
+
+When your app needs the whole logbook level, ask for it on the app's page in the console once the app is approved. Give a short reason, 10 to 500 characters, that says which data you read and why. Jetlog decides per app and emails the decision. The page shows the result. Without it, your app gets the own flights level. When the access is switched on but cannot be used yet, the page says why: no client secret is set, no redirect addresses are approved, or an approved redirect address is a loopback address.
+
+**The client secret.** An approved app, and an app that is waiting for review, has a button on its page in the console to generate a client secret, after the confirmation above. Jetlog shows the secret once, so copy it then and keep it on your server, never in a mobile app or a web page. Generating a new secret replaces the old one at once, Jetlog emails you each time, and you can generate one at most 5 times a day. From the moment an app has a secret, every request to the token endpoint for it must carry the secret as `client_secret` in the body, for the code exchange and for every refresh, see [step 5](#5-exchange-the-code). A pilot who is already connected stays connected: the next refresh with the secret keeps the refresh token your app holds. The whole logbook level needs a secret. An app without one works as described in this guide.
+
+The app's page in the console shows the app id of an app registered with the form, the status of the review, the redirect addresses, which access is enabled, how many pilots have connected the app (a count, never who), the requests of the last 30 days per day split into import, read and changes, the errors your app got, and how often the rate limit stopped it. The statistics start once pilots use the app.
+
+A pilot who approves your app in the Jetlog app sees the name you registered with. For an app registered with a document, the page adds the text "Registered with Jetlog under this name", and the host of your metadata document as a plain detail.
 
 If Jetlog ever disables a partner registration, the token route answers `403` with `integration_disabled` and a refresh answers `unauthorized_client`. Keep the tokens you hold. They work again when the registration is enabled. An authorization request for a disabled app shows the pilot a Jetlog error page with `unauthorized_client`.
 
@@ -180,8 +208,8 @@ open "$AUTH_URL"    # macOS. On Linux use xdg-open.
 | Parameter | Value |
 | :-- | :-- |
 | `response_type` | `code` |
-| `client_id` | The URL of your metadata document |
-| `redirect_uri` | One of the `redirect_uris` in the document, copied exactly |
+| `client_id` | The app id from the developer console, or the URL of your metadata document |
+| `redirect_uri` | One of the redirect addresses you registered, or one of the `redirect_uris` in your document, copied exactly |
 | `scope` | `import` for the access of the key pair. `import read write` lets the pilot choose a wider level, see [Access levels](#access-levels) |
 | `state` | A random value you check again on the callback |
 | `code_challenge` | The S256 challenge of your verifier |
@@ -235,7 +263,7 @@ curl -sS -X POST https://jetlog.app/oauth/token \
 
 The last parameter, `client_secret`, is for an app that has a client secret. An app without one leaves it out. When the app has a secret and the request has none, or a wrong one, the answer is `401` with `{"error":"invalid_client"}`. That request does not use up the code, so repeat it with the right secret within the 60 seconds. HTTP Basic authentication is not supported: the secret goes in the body.
 
-The `redirect_uri` is the same string you used in the authorization request. The endpoint also accepts a JSON body with the same fields. The `scope` in the response says what was granted. After a request with `scope=import` it is always `import`. The response:
+The `client_id` and the `redirect_uri` are the same strings you used in the authorization request. The endpoint also accepts a JSON body with the same fields. The `scope` in the response says what was granted. After a request with `scope=import` it is always `import`. The response:
 
 ```json
 {
@@ -275,6 +303,7 @@ Send at most 200 entries and 1000 people per request, in a body of at most 2 MB.
 **Refreshing.** The access token lasts one hour. Refresh a minute or so before it expires, or when a call answers `401`:
 
 ```sh
+# An app without a client secret leaves out the last line.
 curl -sS -X POST https://jetlog.app/oauth/token \
   -d grant_type=refresh_token \
   --data-urlencode "refresh_token=$REFRESH_TOKEN" \
@@ -282,26 +311,29 @@ curl -sS -X POST https://jetlog.app/oauth/token \
   --data-urlencode "client_secret=$CLIENT_SECRET"
 ```
 
-The response has the same shape as the code exchange:
+The response has the same shape as the code exchange. The example sends a client secret, so the response carries the refresh token that was sent:
 
 ```json
 {
   "access_token": "jlp_example_second_access_token",
   "token_type": "Bearer",
   "expires_in": 3600,
-  "refresh_token": "jlr_example_second_refresh_token",
+  "refresh_token": "jlr_example_refresh_token",
   "scope": "import"
 }
 ```
 
-A refresh token is good for one refresh. The response carries a new refresh token, which is good for 90 days from that moment. A pilot whose app goes unused for 90 days has to connect again.
+What comes back as `refresh_token` depends on whether your app has a client secret. Either way the refresh token is good for 90 days from that moment, and a pilot whose app goes unused for 90 days has to connect again.
+
+- An app that sends its client secret keeps one refresh token for the life of the connection. Each refresh answers with a new access token and the same refresh token. The access tokens from earlier refreshes stay valid until their own hour is up. Refreshes can therefore run in parallel: two workers that refresh at the same moment both end up with a working access token, and a response that never arrives cannot cost you the connection.
+- An app without a client secret gets a new refresh token with every refresh and must store it each time. The old refresh token stops working, and so does the access token that came with it.
 
 Rules for refreshing:
 
-- Save the new refresh token before you do anything else with the response. The old one no longer works.
-- Run one refresh at a time per pilot. Two refreshes with the same token race, and the loser fails with `invalid_grant`.
-- Never reuse an old refresh token. Presenting a refresh token that was already replaced, other than within seconds of the replacement, ends the whole connection and the pilot has to connect again.
-- Give the refresh request a generous timeout. If you cannot tell whether a refresh went through, the old token may already be spent. A retry then answers `invalid_grant`, and the pilot connects again.
+- Save the refresh token from the response before you do anything else with it. For an app with a client secret it is the one you sent. For an app without one it is a new token.
+- An app without a client secret runs one refresh at a time per pilot. Two refreshes with the same token race, and the loser fails with `invalid_grant`.
+- Never use a refresh token that was replaced. Presenting one, other than within seconds of the replacement, ends the whole connection and the pilot has to connect again.
+- Give the refresh request a generous timeout. An app without a client secret that cannot tell whether a refresh went through may find the old token already spent. A retry then answers `invalid_grant`, and the pilot connects again. An app with a client secret can send the same refresh again.
 - `client_id` is optional on a refresh. When you send it, it has to be the same one the token was issued to.
 - An app that has a client secret sends it with every refresh, as in the example. Without it, or with a wrong one, the answer is `401` with `{"error":"invalid_client"}`. That request does not use up the refresh token, so repeat it with the right secret.
 
@@ -392,7 +424,7 @@ On iOS keep them in the Keychain. Use `kSecAttrAccessibleAfterFirstUnlockThisDev
 
 ### Refresh tokens rotate
 
-Every refresh replaces the refresh token, so refreshes must not run concurrently. Route every call through one component that owns the token pair, takes a lock around the refresh, and writes the new refresh token to secure storage before it returns. If your app also refreshes from an extension or a background task, those take the same lock, or only one of them refreshes.
+A phone app works without a client secret, so every refresh replaces the refresh token, and refreshes must not run concurrently. Route every call through one component that owns the token pair, takes a lock around the refresh, and writes the new refresh token to secure storage before it returns. If your app also refreshes from an extension or a background task, those take the same lock, or only one of them refreshes.
 
 ## A server
 
@@ -402,11 +434,11 @@ A server uses the ordinary web flow.
 - When you start a connection, create `state` and the code verifier on the server, store them against the pilot's session, and send the pilot to the authorization URL. On the callback, look up the pilot by `state`, compare `iss`, and exchange the code with the stored verifier within 60 seconds.
 - Store the refresh token per pilot in encrypted storage, and the access token with its expiry. Never send either to a browser or a mobile client that does not need it.
 - Keep the client secret, when the app has one, on the server too, and send it as `client_secret` with every code exchange and every refresh.
-- Background sync works from these tokens without the pilot present. Before each sync, take a per-pilot lock, refresh if the access token is within a minute of expiring, store the new refresh token, release the lock, then import.
+- Background sync works from these tokens without the pilot present. Before each sync, refresh if the access token is within a minute of expiring and store what comes back. An app without a client secret takes a per-pilot lock around that refresh and writes the new refresh token before it releases the lock. An app with a client secret gets the same refresh token back and can refresh from several workers at once.
 - When a refresh answers `invalid_grant`, stop syncing for that pilot, mark the pilot as disconnected, and ask the pilot to connect again the next time they open your app.
 - When a pilot disconnects in your settings, revoke the refresh token and delete the stored tokens.
 
-A pilot who uses your phone app and your server needs one holder of the refresh token. Either the server holds it, and the phone app connects through your server's callback, or the phone app holds it and calls Jetlog directly. Do not copy one refresh token to a second place, because the first refresh in either place makes the other copy useless.
+A pilot who uses your phone app and your server needs one holder of the refresh token. Either the server holds it, and the phone app connects through your server's callback, or the phone app holds it and calls Jetlog directly. Do not copy one refresh token to a second place. When the app has no client secret, the first refresh in either place makes the other copy useless.
 
 ## Errors on the token route
 
@@ -430,15 +462,16 @@ On the authorization and token endpoints:
 
 | Where | Meaning | What to do |
 | :-- | :-- | :-- |
-| Authorization, the pilot sees a Jetlog error page with `invalid_client` and the status `400` | No redirect to your callback. Jetlog could not trust the request: the metadata document is unreachable or invalid (a `client_name` that reads as "Jetlog" is invalid), `redirect_uri` is not in the document or not approved, or a required parameter is missing | Fix the document or the request |
-| Authorization, the pilot sees a Jetlog error page with `unauthorized_client` and the status `400` | No redirect to your callback. Your app is not approved yet, was not approved, or its registration is disabled. A key pair partner whose document is not linked yet gets this too | Check the status on the app's page in the developer console (step 2). A key pair partner writes to support@jetlog.app |
+| Authorization, the pilot sees a Jetlog error page with `invalid_client` and the status `400` | No redirect to your callback. Jetlog could not trust the request: the `client_id` is not known, the metadata document is unreachable or invalid (a `client_name` that reads as "Jetlog" is invalid), `redirect_uri` is not one of the app's redirect addresses or not approved, or a required parameter is missing | Fix the `client_id`, the document or the request |
+| Authorization, the pilot sees a Jetlog error page with `unauthorized_client` and the status `400` | No redirect to your callback. Your app was not approved, was withdrawn, or its registration is disabled. A key pair partner whose document is not linked yet gets this too | Check the status on the app's page in the developer console (step 2). A key pair partner writes to support@jetlog.app |
+| Authorization, the sign-in pages say the app is in development, and the pilot cannot approve | Nothing is issued and there is no redirect. Your app is waiting for review and the pilot is not its developer | Only the developer's own Jetlog account can connect the app until Jetlog has approved it |
 | Authorization, the pilot sees a Jetlog error page with `invalid_request`, `unsupported_response_type` or `invalid_target` and the status `400` | No redirect to your callback. A parameter is wrong | `code_challenge` has to be present and `code_challenge_method` has to be `S256`, `response_type` has to be `code`, `resource` has to be `https://jetlog.app/api/partner/v1` |
 | Authorization, redirect with `error=access_denied` | The pilot declined or cancelled | Show that nothing was connected |
 | Authorization, redirect with `error=unauthorized_client` or `error=invalid_scope` | Your registration was disabled, or your app stopped meeting the conditions of the whole logbook level, while the pilot was deciding | Show that nothing was connected. Check the app's page in the developer console |
 | Authorization, the pilot sees "Account scheduled for deletion" and the status `403` | No redirect to your callback. The pilot's account is scheduled for deletion | Show that nothing was connected. The pilot can cancel the deletion in the Jetlog app and connect again |
 | Token, `401` `{"error":"invalid_client"}` | Your app has a client secret, and the request has none or a wrong one | Send `client_secret` in the body and repeat the same request. The code or refresh token has not been used up |
 | Token, `400` `{"error":"invalid_grant"}` on a code | The code expired (60 seconds), was already used, or something does not match: `client_id`, `redirect_uri`, `code_verifier` or `resource` | Start the authorization again |
-| Token, `400` `{"error":"invalid_grant"}` on a refresh | The refresh token is unknown, already used, expired, or revoked, or the pilot disconnected, signed out everywhere or scheduled the account for deletion | The pilot connects again |
+| Token, `400` `{"error":"invalid_grant"}` on a refresh | The refresh token is unknown, already replaced, expired, or revoked, or the pilot disconnected, signed out everywhere or scheduled the account for deletion | The pilot connects again |
 | Token, `400` `{"error":"unauthorized_client"}` on a refresh | Jetlog has disabled your partner registration | Keep the stored tokens and stop syncing. Email support@jetlog.app. The same refresh token works again once the registration is enabled |
 | Token, `400` `{"error":"invalid_request"}` or `{"error":"unsupported_grant_type"}` | `grant_type` is missing or not one of `authorization_code` and `refresh_token` | Fix the request |
 | Token or revoke, `429` | A `Retry-After` header and `{"error":"rate_limited","retry_after":n}` | Wait, then try again |
@@ -472,9 +505,9 @@ You can repeat the same payload on the token route that you sent on the key rout
 
 ## Checklist
 
-- [ ] The metadata document is served over https, answers `200` without redirects, and its `client_id` equals its own URL.
-- [ ] `client_name` is printable ASCII of at most 64 characters, and every redirect URI is https.
-- [ ] The app is registered in the developer console and approved, and the document carries the `jetlog_developer` value. A key pair partner has its document linked by Jetlog.
+- [ ] The app is registered in the developer console and approved, and `client_id` in every request is the app id from the console or the address of the metadata document. A key pair partner has its document linked by Jetlog.
+- [ ] A metadata document is served over https, answers `200` without redirects, its `client_id` equals its own URL, and it carries the `jetlog_developer` value.
+- [ ] `client_name` of a document is printable ASCII of at most 64 characters, and every redirect URI is https.
 - [ ] A new or changed redirect URI is approved by Jetlog before it is used.
 - [ ] Every authorization request has a fresh `state` and a fresh S256 code challenge, and carries the `scope` your app needs (`import` for the access of the key pair) and `resource=https://jetlog.app/api/partner/v1`.
 - [ ] The callback checks `state` and `iss`, and handles `error=access_denied`.
@@ -482,7 +515,7 @@ You can repeat the same payload on the token route that you sent on the key rout
 - [ ] An app with a client secret keeps it on its server and sends it as `client_secret` with the code exchange and with every refresh.
 - [ ] Phone app: system browser, https callback that the app has claimed, no custom scheme.
 - [ ] Tokens live in the Keychain, the Android Keystore or encrypted server storage, and not in logs.
-- [ ] One refresh at a time per pilot, and the new refresh token is saved before the response is used.
+- [ ] The refresh token from every response is saved before the response is used. An app without a client secret also runs one refresh at a time per pilot.
 - [ ] A `401` triggers one refresh and one retry. A failed refresh moves the pilot to "not connected".
 - [ ] Requests have at most 200 entries, 1000 people and 2 MB of body, include the `people` they refer to, and wait out `Retry-After` on a `429`.
 - [ ] `skipped` and `warnings` are read on every response.

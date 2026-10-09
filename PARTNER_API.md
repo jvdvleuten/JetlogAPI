@@ -1,6 +1,6 @@
 # Partner API reference
 
-This is the reference for everything an app can call once a pilot has connected it to their Jetlog logbook. The [README](README.md) describes the payload of the import route. [MIGRATION.md](MIGRATION.md) covers registering your app and the connection itself: the developer console, the metadata document, the authorization request, the token exchange and refreshing. This page covers what a connected app can do with its token, route by route.
+This is the reference for everything an app can call once a pilot has connected it to their Jetlog logbook. The [README](README.md) describes the payload of the import route. [MIGRATION.md](MIGRATION.md) covers registering your app and the connection itself: the developer console, the registration form, the metadata document, the authorization request, the token exchange and refreshing. This page covers what a connected app can do with its token, route by route.
 
 Words used on this page:
 
@@ -57,10 +57,10 @@ The whole logbook level is available only to an app that has all of these:
 
 - Jetlog has switched the access on for the app. Once your app is approved, you ask for it on the app's page in the developer console (`https://jetlog.app/developers/console`) with a short reason, and Jetlog decides per app and emails the decision.
 - The app has a client secret. You generate it on the same page, and Jetlog shows it once. An app that has a client secret sends it as `client_secret` in the body of every request to the token endpoint, for the code exchange and for every refresh.
-- The app has approved redirect addresses. Jetlog approves the addresses in your document when it approves your app.
+- The app has approved redirect addresses. Jetlog approves the addresses of your app, the ones on its page in the console or in its document, when it approves your app.
 - None of the approved redirect addresses is a loopback address (`localhost`, `127.0.0.1` or `[::1]`). An app that runs on the pilot's own computer therefore works at the own flights level.
 
-[MIGRATION.md](MIGRATION.md#2-register-your-app) describes the registration and the client secret. For an app that does not meet all of these, a request for `import read write` is narrowed to `import` without any error. The pilot is offered the own flights level only, and the token response says `"scope": "import"`.
+[MIGRATION.md](MIGRATION.md#1-register-your-app) describes the registration, and [step 2](MIGRATION.md#2-review-development-and-the-client-secret) the client secret. While your app is waiting for review, your own Jetlog account can use the whole logbook level without Jetlog's switch and without approved addresses, as long as the app has a client secret and no loopback address. That lets you build and test the read routes and the proposals before the review is done. For an app that does not meet all of these, a request for `import read write` is narrowed to `import` without any error. The pilot is offered the own flights level only, and the token response says `"scope": "import"`.
 
 An app can therefore receive less than it asked for. The token response tells what was granted, in its `scope` field:
 
@@ -78,7 +78,7 @@ When the pilot picks own flights, or the app does not meet the conditions for th
 
 A refresh keeps the level that was granted. To get another level, send the pilot through the authorization request again.
 
-A request for the whole logbook looks like this. It is the request from MIGRATION.md with a different `scope`:
+A request for the whole logbook looks like this. It is the request from MIGRATION.md with a different `scope`. `client_id` is the app id from the developer console, or the address of your metadata document, which is what the example shows:
 
 ```sh
 AUTH_URL="https://jetlog.app/oauth/authorize?response_type=code&client_id=https%3A%2F%2Fpartner.example.com%2Fjetlog-client.json&redirect_uri=https%3A%2F%2Fpartner.example.com%2Foauth%2Fjetlog%2Fcallback&scope=import%20read%20write&state=${STATE}&code_challenge=${CODE_CHALLENGE}&code_challenge_method=S256&resource=https%3A%2F%2Fjetlog.app%2Fapi%2Fpartner%2Fv1"
@@ -99,7 +99,7 @@ If Jetlog later switches the whole logbook level off for an app, or the app stop
 
 ## Connecting an app, step by step
 
-This is a whole connection in order, with the values of the example metadata document in [MIGRATION.md](MIGRATION.md#1-host-the-metadata-document). `STATE`, `CODE_VERIFIER` and `CODE_CHALLENGE` are made as [MIGRATION.md](MIGRATION.md#3-build-the-authorization-request) describes. `CLIENT_SECRET` is the client secret of an app that has one.
+This is a whole connection in order. The examples use the address of the example metadata document in [MIGRATION.md](MIGRATION.md#with-a-metadata-document) as `client_id`. An app registered with the form puts its app id there, for example `jetlog_app_VUGENuUg7Q6UL-CGr67N8aEz5Q_ZvwfKxWeBYz0Bd9s`, and every other value stays the same. `STATE`, `CODE_VERIFIER` and `CODE_CHALLENGE` are made as [MIGRATION.md](MIGRATION.md#3-build-the-authorization-request) describes. `CLIENT_SECRET` is the client secret of an app that has one.
 
 ### 1. Send the pilot to Jetlog
 
@@ -109,8 +109,8 @@ open "https://jetlog.app/oauth/authorize?response_type=code&client_id=https%3A%2
 
 When the pilot has approved in the Jetlog app, the browser comes back to your redirect address with `code` and `state`. When the pilot declined or cancelled, it comes back with `error=access_denied`. A problem with the request itself shows the pilot an error page at Jetlog with the error code and a `400`, and the browser is not sent back:
 
-- `invalid_client`: the redirect address is not in your document or not approved, or the document cannot be used. Fix the document or the address.
-- `unauthorized_client`: the app is not approved yet or is disabled. Check its page in the developer console.
+- `invalid_client`: the `client_id` is not known, the redirect address is not one of your app's addresses or not approved, or the document cannot be used. Fix the `client_id`, the address or the document.
+- `unauthorized_client`: the app was not approved, was withdrawn or is disabled. Check its page in the developer console. An app that is still waiting for review does not give this answer. The sign-in pages say that it is in development, and only its developer's own account can connect it.
 - `invalid_request`, `unsupported_response_type` or `invalid_target`: a parameter is wrong, for example the PKCE challenge or the `resource`.
 
 ### 2. Exchange the code
@@ -167,10 +167,10 @@ curl -sS -X POST https://jetlog.app/oauth/token \
   --data-urlencode "client_secret=$CLIENT_SECRET"
 ```
 
-The answer has the shape of step 2, with a new refresh token that replaces the old one. Save it before anything else.
+The answer has the shape of step 2. An app that sent its client secret gets the same `refresh_token` back, and the access tokens from earlier refreshes stay valid until they expire, so refreshes can run in parallel. An app without a client secret gets a new refresh token that replaces the old one, and the old access token stops working. Save the refresh token from the answer before anything else.
 
 - `401` `{"error":"invalid_client"}`: the client secret is missing or wrong. The refresh token is not used up, so repeat the request with the right secret.
-- `400` `{"error":"invalid_grant"}`: the refresh token is spent, expired or revoked, or the pilot removed the app. The pilot connects again.
+- `400` `{"error":"invalid_grant"}`: the refresh token was replaced, expired or revoked, or the pilot removed the app. The pilot connects again.
 - `400` `{"error":"unauthorized_client"}`: Jetlog has disabled the app. Keep the refresh token. It works again when the app is enabled.
 
 ## The routes
@@ -1130,7 +1130,7 @@ A body that is too large for the route answers `413` with a flat body that names
 | Length of a text value in an operation | 2000 characters |
 | Flights per page of `GET /entries` | 50 by default, 200 at most |
 | Access token | 1 hour |
-| Refresh token | 90 days, replaced on every use |
+| Refresh token | 90 days. An app with a client secret keeps the same refresh token, an app without one gets a new one on every use |
 
 The two body limits count the bytes Jetlog receives, so they hold for a body sent in chunks without a `Content-Length` header too. Send both routes a JSON body: a multipart body is not read.
 
@@ -1151,4 +1151,4 @@ At the own flights level an app also cannot read the logbook or propose changes.
 
 ## The sample app
 
-The [Jetlog sample app](https://github.com/jvdvleuten/jetlog-sample-app) is a small web app that runs the connection flow against a pilot's own account. It sends the authorization request, receives the callback, exchanges the code, adds a flight and keeps its tokens fresh. Jetlog registered it itself, so you can run it as it is with your own account before your own app is registered, and read its code as a starting point. It runs on your own computer, with a redirect address on `127.0.0.1`, so it connects at the own flights level, whatever it asks for. The read routes and the proposals need the whole logbook level, which an app with a loopback redirect address cannot have. Its document needs no `jetlog_developer` field because Jetlog registered it. Your own document does, see [MIGRATION.md](MIGRATION.md#2-register-your-app). The sample needs the Jetlog app on an iPhone or iPad with a logbook, to approve the connection in.
+The [Jetlog sample app](https://github.com/jvdvleuten/jetlog-sample-app) is a small web app that runs the connection flow against a pilot's own account. It sends the authorization request, receives the callback, exchanges the code, adds a flight and keeps its tokens fresh. Jetlog registered it itself, so you can run it as it is with your own account before your own app is registered, and read its code as a starting point. It runs on your own computer, with a redirect address on `127.0.0.1`, so it connects at the own flights level, whatever it asks for. The read routes and the proposals need the whole logbook level, which an app with a loopback redirect address cannot have. Its document needs no `jetlog_developer` field because Jetlog registered it. A document of your own does, see [MIGRATION.md](MIGRATION.md#with-a-metadata-document). An app registered with the form needs no document at all, see [MIGRATION.md](MIGRATION.md#1-register-your-app). The sample needs the Jetlog app on an iPhone or iPad with a logbook, to approve the connection in.

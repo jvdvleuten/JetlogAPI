@@ -1037,9 +1037,23 @@ def check_registration() -> None:
         if "https://jetlog.app/developers/console" not in name.read_text():
             fail(name.name, "must point to the developer console, https://jetlog.app/developers/console")
     migration = (ROOT / MIGRATION).read_text()
-    for needle in ("https://jetlog.app/developers", "jetlog_developer", "Registered with Jetlog under this name", "already uses the key pair"):
+    for needle in (
+        "https://jetlog.app/developers", "jetlog_developer", "Registered with Jetlog under this name", "already uses the key pair",
+        "app id", "in development", "Confirm with an emailed code", "valid for 10 minutes",
+    ):
         if needle not in migration:
             fail(MIGRATION, f"the registration step must mention {needle!r}")
+    # An app registered with the form gets an id `jetlog_app_` plus 43 base64url characters.
+    for name in DOCS + [MIGRATION, PARTNER]:
+        for app_id in re.findall(r"jetlog_app_[A-Za-z0-9_-]*", (ROOT / name).read_text()):
+            if not re.fullmatch(r"jetlog_app_[A-Za-z0-9_-]{43}", app_id):
+                fail(name, f"the app id {app_id!r} must be jetlog_app_ plus 43 base64url characters")
+    # An app with a client secret keeps its refresh token, so no document may say that a refresh always replaces it.
+    for name in DOCS + [MIGRATION, PARTNER]:
+        text = (ROOT / name).read_text()
+        for stale in ("replaced on every use", "good for one refresh", "Every refresh replaces the refresh token"):
+            if stale in text:
+                fail(name, f"{stale!r} is only true for an app without a client secret")
     if not re.search(r"existing[^.\n]{0,80}registration", migration):
         fail(MIGRATION, "a key pair partner asks Jetlog to link its document to its existing registration, and the guide must say so")
 
