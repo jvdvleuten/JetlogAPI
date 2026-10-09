@@ -434,6 +434,7 @@ REFUSAL_TEMPLATES = [
     "must be a list of crew members",
     "must be a single value",
     "a delete carries no data",
+    "a deletion carries no other data",
     "must be true or false",
 ]
 REFUSAL_PATTERNS = [
@@ -448,6 +449,7 @@ REFUSAL_PATTERNS = [
     re.compile(r"must be a list of crew members"),
     re.compile(r"must be a single value"),
     re.compile(r"a delete carries no data, \w+ is not allowed"),
+    re.compile(r"a deletion carries no other data, \w+ is not allowed"),
     re.compile(r"must be true or false"),
     re.compile(r"(entry|person) [0-9a-f-]{36} not found"),
     re.compile(r"unknown person_id\(s\): .+"),
@@ -630,6 +632,8 @@ def check_proposal(
                 fail(at, "a create or update needs a non-empty `data` object")
             else:
                 check_data(at, resource, kind, data, known_people | created_people)
+                if data.get("is_deleted") is True and set(data) != {"is_deleted"}:
+                    fail(at, "an operation that sets `is_deleted` to true carries no other field")
                 if resource == "entry" and kind == "update" and record_id in tracked and FEED_KEYS & set(data):
                     fail(at, f"{sorted(FEED_KEYS & set(data))} follow the flight feed on a tracked flight and are refused")
         if "add_self" in op and not (kind == "create" and resource == "entry" and isinstance(op["add_self"], bool)):
