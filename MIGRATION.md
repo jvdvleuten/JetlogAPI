@@ -107,7 +107,7 @@ The rules:
 - The response is a JSON object of at most 64 KB and arrives within a few seconds (the whole fetch is cut off after 5 seconds).
 - The host resolves to public addresses. A host that resolves to a private, loopback or link-local address is refused.
 - `client_id` is required and equals the URL the document is served from, character for character.
-- `client_name` is required. It is at most 64 characters of printable ASCII, with no control characters. Use the same name you give Jetlog at registration.
+- `client_name` is required. It is at most 64 characters of printable ASCII, with no control characters. Pilots see the name Jetlog registered for you in step 2, so use the same name here.
 - `redirect_uris` is required and lists at least one URI of at most 255 characters. Every URI is `https://`. Plain `http://` is accepted only for `127.0.0.1`, `localhost` and `[::1]`, which is meant for development on your own computer. Custom schemes such as `partner://callback` are not accepted. See [A phone app](#a-phone-app) for why.
 - `client_uri`, `logo_uri` and `software_id` are optional, at most 255 characters each. Other fields are ignored.
 
@@ -119,7 +119,7 @@ Put one redirect URI in the document for each place a pilot can come back to: on
 
 Email the URL of your metadata document to support@jetlog.app, together with the name pilots should see for your partner. Jetlog links the URL to your existing partner registration, which is why flights you created with the keys stay yours. Jetlog tells you when it is done.
 
-Until then an authorization request for your URL fails and no token is issued. If Jetlog ever disables a partner registration, the token route answers `403` with `integration_disabled` and tokens issued earlier stop working.
+Until then an authorization request for your URL comes back to your callback with `error=unauthorized_client`, and no token is issued. If Jetlog ever disables a partner registration, the token route answers `403` with `integration_disabled` and tokens issued earlier stop working.
 
 ### 3. Build the authorization request
 
@@ -170,6 +170,8 @@ https://partner.example.com/oauth/jetlog/callback?error=access_denied&error_desc
 ```
 
 Show the pilot that the connection was not made. Do not start the flow again on your own.
+
+A redirect is not guaranteed. When the pilot denies the request in the Jetlog app, or the ten minutes run out, the Jetlog page offers "Try again" and "Cancel". Only "Cancel" redirects to your callback with `error=access_denied`. A pilot can also close the page. Treat a flow that never comes back as not connected, and let the pilot start again.
 
 ### 5. Exchange the code
 
@@ -360,7 +362,8 @@ A pilot who uses your phone app and your server needs one holder of the refresh 
 | `403` | `{"error":"insufficient_scope"}` | The token does not carry the `import` scope | The pilot connects again with `scope=import` |
 | `413` | `{"error":"too_many_entries","max":200}` | More than 200 entries in one request | Split the payload into requests of at most 200 entries. Nothing was written |
 | `429` | A `Retry-After` header, in seconds, and `{"error":"rate_limited","retry_after":n}` | Too many requests for this pilot | Wait for `Retry-After`, then send the same request. Send one pilot's imports one after another |
-| other `4xx` or `5xx` | `{"error":"<message>"}` | The request could not be processed as a whole | Read the message. A payload problem needs a fixed payload. After a `5xx`, resend the same payload. It is safe, because matching applies the same rows again |
+| `400` | `{"error":"<code>"}`, for example `invalid_payload` | The payload could not be imported as a whole | Fix the payload. Nothing was written |
+| `400` for a body that is not valid JSON, and any `5xx` | `{"errors":{"detail":"<status text>"}}` | The request could not be read, or something failed on the Jetlog side | Fix the request body. After a `5xx`, resend the same payload. It is safe, because matching applies the same rows again |
 
 Resending a payload is always safe. Entries that already exist are matched and updated, not duplicated, and people that were created by an earlier attempt match on the retry.
 
@@ -370,7 +373,8 @@ On the authorization and token endpoints:
 
 | Where | What you get | Meaning |
 | :-- | :-- | :-- |
-| Authorization, browser shows a Jetlog error page | No redirect to your callback | Jetlog could not trust the request: the metadata document is unreachable or invalid, your URL is not registered, `redirect_uri` is not in the document, or a required parameter is missing |
+| Authorization, browser shows a Jetlog error page | No redirect to your callback | Jetlog could not trust the request: the metadata document is unreachable or invalid, `redirect_uri` is not in the document, or a required parameter is missing |
+| Authorization, redirect with `error=unauthorized_client` | Your metadata document URL is not registered with Jetlog, or the registration is disabled | Register the URL (step 2), or email support@jetlog.app |
 | Authorization, redirect with `error=access_denied` | The pilot declined or cancelled | Show that nothing was connected |
 | Authorization, redirect with `error=invalid_request`, `unsupported_response_type` or `invalid_target` | A parameter is wrong | `code_challenge_method` has to be `S256`, `response_type` has to be `code`, `resource` has to be `https://jetlog.app/api/partner/v1` |
 | Token, `400` `{"error":"invalid_grant"}` on a code | The code expired (60 seconds), was already used, or something does not match: `client_id`, `redirect_uri`, `code_verifier` or `resource` | Start the authorization again |
