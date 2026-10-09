@@ -426,7 +426,8 @@ CALCULATED_FIELDS = {
     "total_time_of_flight", "total_air_time", "fstd_session", "fstd_instructor_time",
     "fstd_examiner_time", "fstd_senior_instructor_time", "cross_country_distance", "computed_at",
 }
-# One row of GET /entries as a token without the files and signatures scopes sees it.
+# One row of GET /entries as a partner sees it: the shape the Jetlog app gets, with no
+# signature, attachment or photo fields at all.
 ENTRY_ROW_KEYS = {
     "id", "version", "type", "date", "entry_source", "flight_number", "registration", "from", "to",
     "actual_from", "actual_to", "off_blocks", "airborne", "touchdown", "on_blocks",
@@ -436,18 +437,47 @@ ENTRY_ROW_KEYS = {
     "takeoffs_and_landings", "approaches", "go_arounds", "passengers_on_board", "fuel_planned",
     "fuel_used", "cargo_on_board", "start_time", "end_time", "fstd_id", "session_type",
     "fstd_takeoffs", "fstd_landings", "is_imported_from_other_logbook", "is_deleted", "remarks",
-    "people", "updated_at", "calculated_times", "signature", "signature_attachment_id",
-    "attachment_count",
+    "people", "updated_at", "calculated_times",
 }
 DERIVED_KEYS = {"date", "registration", "from", "to", "off_blocks", "airborne", "touchdown", "on_blocks"}
 PERSON_ROW_KEYS = {
     "id", "first_name", "last_name", "default_role", "employee_number",
-    "is_imported_from_other_logbook", "has_photo",
+    "is_imported_from_other_logbook",
+}
+# Keys that must appear in no response example and in no field list: a partner is never
+# shown anything about files, photos or signatures, and a proposal has no `raw_before`.
+HIDDEN_KEYS = {
+    "signature", "signature_attachment_id", "signature_sha256", "signature_waived",
+    "signature_change", "attachment_count", "attachments", "has_photo", "photo",
+    "photo_attachment_id", "photo_sha256", "raw_before",
+}
+# What a proposal refuses, and the permission it names.
+REFUSED_RESOURCES = {"entry_attachment": "files", "signature_link": "signatures"}
+REFUSED_ENTRY_KEYS = {"signature", "signature_attachment_id", "signature_sha256", "signature_waived"}
+REFUSED_PERSON_KEYS = {"photo_attachment_id", "photo_sha256"}
+# `before` and `after` of an entry in a preview item.
+PREVIEW_ENTRY_KEYS = {
+    "id", "type", "flight_number", "date", "registration", "from", "to", "off_blocks",
+    "airborne", "touchdown", "on_blocks", "remarks", "is_deleted", "people",
 }
 AIRCRAFT_ROW_KEYS = {
     "id", "use_system", "aircraft_icao_code", "aircraft_iata_code", "system_aircraft_icao_code",
     "system_aircraft_iata_code", "is_imported_from_other_logbook",
 }
+
+
+def hidden_keys_in(value: object, path: str = "") -> list[str]:
+    """Every key of a parsed JSON value, at any depth, that a partner must never be shown."""
+    found = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in HIDDEN_KEYS:
+                found.append(f"{path}/{key}")
+            found += hidden_keys_in(item, f"{path}/{key}")
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            found += hidden_keys_in(item, f"{path}[{i}]")
+    return found
 
 
 def timestamp(where: str, value: object) -> datetime.datetime | None:
@@ -463,8 +493,11 @@ def timestamp(where: str, value: object) -> datetime.datetime | None:
 
 def check_data(where: str, resource: str, op: str, data: dict, known_people: set[str]) -> None:
     allowed = ENTRY_DATA_KEYS if resource == "entry" else PERSON_DATA_KEYS
+    refused = REFUSED_ENTRY_KEYS if resource == "entry" else REFUSED_PERSON_KEYS
     for key in data:
-        if key not in allowed:
+        if key in refused:
+            fail(where, f"`{key}` is refused in a partner proposal (files and signatures are never available)")
+        elif key not in allowed:
             fail(where, f"`{key}` is not a field a partner can set on a {resource}")
     for key, value in data.items():
         if isinstance(value, str) and len(value) > 2000:
@@ -531,6 +564,9 @@ def check_proposal(where: str, payload: object, known_entries: set[str], known_p
         kind, resource, record_id, data = op.get("op"), op.get("resource"), op.get("id"), op.get("data")
         if kind not in ("create", "update", "delete"):
             fail(at, "`op` must be create, update or delete")
+        if resource in REFUSED_RESOURCES:
+            fail(at, f"`{resource}` is refused in a partner proposal (files and signatures are never available)")
+            continue
         if resource not in ("entry", "person"):
             fail(at, "`resource` must be entry or person")
             continue
@@ -555,10 +591,9 @@ def check_proposal(where: str, payload: object, known_entries: set[str], known_p
             fail(at, "`add_self` is a boolean on an entry create only")
 
 
-def check_entry_row(where: str, row: dict, detail: bool) -> None:
-    expected = ENTRY_ROW_KEYS | ({"signature_sha256"} if detail else set())
-    if set(row) != expected:
-        fail(where, f"entry keys differ: missing {sorted(expected - set(row))}, extra {sorted(set(row) - expected)}")
+def check_entry_row(where: str, row: dict) -> None:
+    if set(row) != ENTRY_ROW_KEYS:
+        fail(where, f"entry keys differ: missing {sorted(ENTRY_ROW_KEYS - set(row))}, extra {sorted(set(row) - ENTRY_ROW_KEYS)}")
         return
     if not UUID.fullmatch(row["id"]) or not DATE.fullmatch(row["date"]):
         fail(where, "id or date is malformed")
@@ -577,8 +612,6 @@ def check_entry_row(where: str, row: dict, detail: bool) -> None:
     if row["derived"]["registration"] != row["registration_system" if tracking else "registration"]:
         fail(where, "`derived.registration` does not follow `update_flight_data`")
     timestamp(f"{where} updated_at", row["updated_at"])
-    if row["signature"] not in ("none", "waived", "signed"):
-        fail(where, "`signature` must be none, waived or signed")
     for person in row["people"]:
         if set(person) != {"person_id", "role", "is_deleted"}:
             fail(where, "a crew item of an entry has `person_id`, `role` and `is_deleted`")
@@ -610,11 +643,24 @@ def check_pending_change(where: str, body: dict, requests: dict[str, dict]) -> N
             fail(where, "a preview item must describe the operation with the same index")
         elif item["op"] == "delete" and (item["after"] or {}).get("is_deleted") is not True:
             fail(where, "the `after` of a delete shows `is_deleted: true`")
+        if item.get("resource") == "entry":
+            for side in ("before", "after"):
+                if item.get(side) is not None and set(item[side]) != PREVIEW_ENTRY_KEYS:
+                    fail(where, f"an entry `{side}` has the documented display fields only")
+        if (item.get("before") is None) != (item.get("op") == "create"):
+            fail(where, "`before` is null exactly for a create")
     if set(pc["counts"]) != {"creates", "updates", "deletes"}:
         fail(where, "`counts` has creates, updates and deletes")
     created, expires = timestamp(f"{where} created_at", pc["created_at"]), timestamp(f"{where} expires_at", pc["expires_at"])
     if created and expires and expires - created != datetime.timedelta(hours=24):
         fail(where, "`expires_at` must be 24 hours after `created_at`")
+    # `applied` rides on each operation once the proposal is applied, and only then.
+    flags = ["applied" in op for op in pc["operations"]]
+    if pc["status"] == "applied":
+        if not all(flags) or not all(isinstance(op["applied"], bool) for op in pc["operations"]):
+            fail(where, "every operation of an applied proposal has `applied: true|false`")
+    elif any(flags):
+        fail(where, "`applied` appears only on the operations of an applied proposal")
     if pc["status"] == "pending" and pc["decided_at"] is not None:
         fail(where, "a pending proposal has no `decided_at`")
     if pc["status"] == "applied" and (pc["decided_at"] is None or pc["applied_batch_id"] is None):
@@ -736,10 +782,21 @@ def check_partner_api(document: dict | None) -> None:
             fail(at, "a response is a JSON object")
         elif "pending_change" in body:
             check_pending_change(at, body, requests)
+        elif set(body) == {"operations"}:
+            ops = body["operations"]
+            if not all(isinstance(op.get("applied"), bool) for op in ops) or len({op["applied"] for op in ops}) != 2:
+                fail(at, "the partial approval example shows operations with `applied` true and false")
+        elif "missing_scopes" in body:
+            missing = body["missing_scopes"]
+            quoted = ", ".join(f'"{s}"' for s in missing)
+            if body.get("error") != "insufficient_scope" or not missing or not set(missing) <= {"files", "signatures"}:
+                fail(at, "a refusal is `insufficient_scope` and names files and/or signatures")
+            if body.get("message") != f"Connected apps never get the {quoted} permission. Nothing was changed.":
+                fail(at, "the refusal message must be the one Jetlog sends")
         elif "entries" in body:
             rows, page = body["entries"], body.get("pagination", {})
             for i, row in enumerate(rows):
-                check_entry_row(f"{at} entries[{i}]", row, detail=False)
+                check_entry_row(f"{at} entries[{i}]", row)
             if set(page) != {"limit", "has_more", "next_cursor"}:
                 fail(at, "`pagination` has limit, has_more and next_cursor")
             elif page["has_more"] != (page["next_cursor"] is not None):
@@ -747,7 +804,7 @@ def check_partner_api(document: dict | None) -> None:
             elif page["next_cursor"] and rows and page["next_cursor"] != {"date": rows[-1]["derived"]["date"], "id": rows[-1]["id"]}:
                 fail(at, "`next_cursor` must point at the last entry of the page")
         elif "entry" in body:
-            check_entry_row(at, body["entry"], detail=True)
+            check_entry_row(at, body["entry"])
         elif "people" in body:
             for person in body["people"]:
                 if set(person) != PERSON_ROW_KEYS:
@@ -766,7 +823,9 @@ def check_partner_api(document: dict | None) -> None:
             if (body.get("token_type"), body.get("expires_in")) != ("Bearer", 3600) or body.get("scope") not in LEVELS:
                 fail(at, "a token response is Bearer, 3600 seconds, and one of the two levels")
         elif "user_id" in body:
-            if not UUID.fullmatch(body["user_id"]) or body.get("self_person_id") != body["user_id"]:
+            if set(body) != {"user_id", "self_person_id"}:
+                fail(at, "`GET /me` is exactly `user_id` and `self_person_id`")
+            elif not UUID.fullmatch(body["user_id"]) or body["self_person_id"] != body["user_id"]:
                 fail(at, "`self_person_id` is the pilot's own id")
         elif "error" in body:
             err = body["error"]
@@ -774,6 +833,8 @@ def check_partner_api(document: dict | None) -> None:
                 fail(at, "an error body is `{\"error\": \"code\"}` or `{\"error\": {\"message\": ...}}`")
         else:
             fail(at, "a json block of a kind the validator does not know")
+        for path in hidden_keys_in(body):
+            fail(at, f"{path} is a signature, attachment, photo or raw_before field a partner never sees")
 
     # --- The tables agree with the constants above. ---
     def section(heading: str) -> str:
@@ -808,6 +869,37 @@ def check_partner_api(document: dict | None) -> None:
         documented = table_keys(heading)
         if documented != expected:
             fail(where, f"the {label} table differs from the validator: {sorted(documented ^ expected)}")
+
+    # --- The prose agrees with what a partner is and is not shown. ---
+    refused_section = section("What a proposal cannot contain")
+    outside = text.replace(refused_section, "")
+    for name in sorted(HIDDEN_KEYS):
+        if re.search(rf"`{re.escape(name)}`", outside):
+            fail(where, f"`{name}` is mentioned outside the list of refused keys, but a partner never sees or sends it")
+    refused_doc = set(re.findall(r"`([a-z0-9_]+)`", "\n".join(l for l in refused_section.splitlines() if l.startswith("| "))))
+    refused_doc -= {"resource", "data", "entry", "person", "files", "signatures"}
+    if refused_doc != set(REFUSED_RESOURCES) | REFUSED_ENTRY_KEYS | REFUSED_PERSON_KEYS:
+        fail(where, f"the refused table differs from the validator: {sorted(refused_doc ^ (set(REFUSED_RESOURCES) | REFUSED_ENTRY_KEYS | REFUSED_PERSON_KEYS))}")
+
+    access = section("Who may call a route")
+    positions = [access.find(code) for code in ("invalid_token", "insufficient_scope", "integration_disabled", "insufficient_access")]
+    if -1 in positions or positions != sorted(positions):
+        fail(where, "the access checks must list invalid_token, insufficient_scope, integration_disabled and insufficient_access, in that order")
+    limits = section("Rate limits")
+    if not re.search(r"^\| `GET /changes/:id` \| Nothing\.", limits, re.M):
+        fail(where, "the rate limit table must say that GET /changes/:id is not limited")
+
+    flat = {"GET /entries", "GET /entries/:id", "GET /totals"}
+    for row in re.finditer(r"^\| `(GET|POST) (/[^`]*)` \| `(\d{3})` \| `(\{.*?\})` \|", section("Errors per route"), re.M):
+        route, status, shown = f"{row.group(1)} {row.group(2)}", row.group(3), row.group(4)
+        if route in flat and not shown.startswith('{"error":"'):
+            fail(where, f"{route} answers with a flat error body, not {shown}")
+        if route in ("POST /changes", "GET /changes/:id"):
+            refusal = status == "403"
+            if refusal and '"missing_scopes"' not in shown:
+                fail(where, "the 403 of POST /changes is the flat refusal with `missing_scopes`")
+            if not refusal and not shown.startswith('{"error":{'):
+                fail(where, f"{route} answers with a nested error body, not {shown}")
 
     # --- The authorization request and the level names agree with MIGRATION.md. ---
     for sh in re.finditer(r"```sh\n(.*?)\n```", text, re.S):

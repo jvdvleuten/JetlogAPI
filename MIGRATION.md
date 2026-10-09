@@ -62,7 +62,7 @@ A pilot approves a partner at one of two levels. A request with `scope=import` g
 
 The wider level is optional. It is called whole logbook, and a partner asks for it with `scope=import read write`. It adds reading the logbook and proposing changes that the pilot approves in the Jetlog app. Three things to know before asking for it:
 
-- Jetlog enables it for each partner separately. Say so in the email of [step 2](#2-register-the-url). A partner that is not enabled is offered the own flights level only, whatever it asks for.
+- Jetlog enables it for each partner separately. Say so in the email of [step 2](#2-register-the-url). A partner that is not enabled gets the own flights level, whatever it asks for, and no error.
 - The pilot chooses the level when approving, so a partner can receive less than it asked for. The `scope` in the token response says what was granted.
 - A partner that gets `scope=import` back works exactly as described in this guide.
 

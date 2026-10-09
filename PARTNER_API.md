@@ -52,7 +52,7 @@ The level is requested with the `scope` parameter of the authorization request, 
 - `scope=import read write` asks for the whole logbook and lets the pilot choose between the two levels.
 - A request that does not contain both `read` and `write` is handled as `import`.
 
-Whether an app may ask for the whole logbook is set by Jetlog for each app. Say that you want it when you send the URL of your metadata document to support@jetlog.app, or write later to have it enabled. An app that is not enabled is offered the own flights level only, whatever it asks for.
+Whether an app may ask for the whole logbook is set by Jetlog for each app. Say that you want it when you send the URL of your metadata document to support@jetlog.app, or write later to have it enabled. For an app that is not enabled, a request for `import read write` is narrowed to `import` without any error. The pilot is offered the own flights level only, and the token response says `"scope": "import"`.
 
 An app can therefore receive less than it asked for. The token response tells what was granted, in its `scope` field:
 
@@ -80,13 +80,13 @@ open "$AUTH_URL"    # macOS. On Linux use xdg-open.
 What the pilot sees when you ask for the whole logbook:
 
 - The Jetlog app shows your name and a choice between "Only its own flights" and "My whole logbook", each with a sentence on what it means. The wider choice is never preselected.
-- The page used when a pilot signs in with an email code instead of the app offers the same choice.
+- The page used when a pilot signs in with an email code instead of the app offers the same two choices as radio buttons, with neither selected.
 - Approving at this level needs a current version of the Jetlog app.
 - Afterwards, Settings > Connected Apps shows the level the pilot chose.
 
 When you ask for `import`, the pilot sees the screen described in [MIGRATION.md](MIGRATION.md#what-the-pilot-sees-on-the-same-phone), and nothing changes for you.
 
-If Jetlog later switches the whole logbook level off for an app, the tokens that hold it lose the read routes and the proposal routes at once. Those routes answer `403` with `insufficient_access`. Their import route keeps working.
+If Jetlog later switches the whole logbook level off for an app, the tokens that hold it lose the read routes and the proposal routes at once, including the status of proposals already made. Those routes answer `403` with `insufficient_access`. The switch is checked on every request, so a refresh still works and the token keeps saying `import read write`. The import route keeps working. A proposal that was already waiting stays open, and the pilot can reject it but not approve it. It can be approved again when the level is switched back on.
 
 ## The routes
 
@@ -108,29 +108,43 @@ All routes live under `https://jetlog.app/api/partner/v1`.
 
 Send `Authorization: Bearer <access_token>` with the access token of the pilot you act for. Requests and responses are JSON, so send `Content-Type: application/json` with a body. Ids are UUIDs, dates are `YYYY-MM-DD` and times are `HH:MM` zulu.
 
-A partner token works on these routes only. Every other Jetlog route refuses it.
+A partner token works on these routes only. The rest of the Jetlog API, and the endpoint of the AI assistants, refuse it with `401`, whatever scopes the token holds.
 
-Every route can answer these:
+### Who may call a route
 
-| Status | Body | Meaning |
+Every route checks the same four things, in this order, and the first one that fails is the answer. The checks of the later steps are not made when an earlier one fails.
+
+| Step | Check | Answer when it fails |
 | :-- | :-- | :-- |
-| `401` | `{"error":"invalid_token"}` and `WWW-Authenticate: Bearer error="invalid_token"` | The token is missing, unknown, expired, revoked, or meant for another resource. Refresh it once. If that fails, the pilot connects again. |
-| `403` | `{"error":"integration_disabled"}` | Jetlog has switched your partner registration off. |
-| `403` | `{"error":"insufficient_scope"}` | The token does not carry the scope the route needs. |
-| `403` | `{"error":"insufficient_access"}` | The read routes and proposal routes only. Jetlog has switched the whole logbook level off for your app. |
-| `429` | A `Retry-After` header, in seconds, and `{"error":"rate_limited","retry_after":n}` | Too many requests for this pilot. Wait, then send the same request. |
+| 1 | The token is a live partner token for this API. | `401` `{"error":"invalid_token"}` with `WWW-Authenticate: Bearer error="invalid_token"`. The token is missing, unknown, expired, revoked, or meant for another resource. Refresh it once. If that fails, the pilot connects again. |
+| 2 | The token carries the scope the route needs. | `403` `{"error":"insufficient_scope"}`. An own flights token on a read route or a proposal route ends here. |
+| 3 | Jetlog has not switched your partner registration off. | `403` `{"error":"integration_disabled"}`. |
+| 4 | The read routes and the proposal routes only: Jetlog still has the whole logbook level enabled for your app. | `403` `{"error":"insufficient_access"}`. The import route does not make this check and keeps working. |
+
+So four different answers mean four different things: `401` is about the token, `insufficient_scope` is about what the pilot granted, `integration_disabled` is about your registration, and `insufficient_access` is about the whole logbook level of your app.
+
+### Rate limits
+
+A route can also answer `429` with a `Retry-After` header, in seconds, and the body `{"error":"rate_limited","retry_after":30}`. Wait that long, then send the same request. The limits are per pilot, so all connections of one pilot draw from the same allowance.
+
+| Routes | What is counted |
+| :-- | :-- |
+| `POST /import` | The entries plus the people in the request. |
+| `GET /me`, `GET /entries`, `GET /entries/:id`, `GET /people`, `GET /aircraft`, `GET /totals` | Requests. All of these read routes share one limit. |
+| `POST /changes` | The operations in the request. A request over the limit is refused as a whole and stores nothing. |
+| `GET /changes/:id` | Nothing. The status of a proposal is not rate limited. |
 
 The sections below add the errors that belong to one route. [Errors per route](#errors-per-route) has them all in one table.
 
 ## Reading the logbook
 
-The read routes need the `read` scope. They only read. They return what Jetlog stores for the pilot, with the same field names the Jetlog app uses.
+The read routes need the `read` scope. They only read. They return the same JSON that the Jetlog app itself gets from Jetlog, with the same field names.
 
-Files, photos and signature images can never be read by an app. The responses only say whether a signature or a photo exists.
+An app never sees anything about files, photos or signatures. The responses have no signature, attachment or photo fields at all, not even to say that one exists.
 
 ### GET /me
 
-Who the pilot is. `user_id` is the pilot's id. `self_person_id` is the id the pilot has as a crew member, which is what the `people` of a flight use for the pilot themselves. The body can carry further account fields. Ignore the ones you do not know.
+Who the pilot is, as far as the logbook goes. The body is exactly `user_id` and `self_person_id`, and nothing else: no email address and no account details. `user_id` is the pilot's id. `self_person_id` is the id the pilot has as a crew member, which is the `person_id` of the pilot in the `people` of a flight. To get the pilot's name, find the person with that id in `GET /people`.
 
 ```sh
 curl -sS https://jetlog.app/api/partner/v1/me \
@@ -237,10 +251,7 @@ curl -sS "https://jetlog.app/api/partner/v1/entries?from=2026-08-01&to=2026-08-3
         {"person_id": "7b1d1f5c-3a2e-4c8e-9d64-0f6a2b9c1e10", "role": "PIC", "is_deleted": false}
       ],
       "updated_at": "2026-08-14T15:42:07.318204Z",
-      "calculated_times": null,
-      "signature": "none",
-      "signature_attachment_id": null,
-      "attachment_count": 0
+      "calculated_times": null
     }
   ],
   "pagination": {
@@ -257,7 +268,6 @@ Reading a flight:
 - `entry_source` says where the flight came from: `manual` for a flight the pilot entered, `external:` followed by a short name for a flight a partner added, and other values for roster imports and AI assistants.
 - `version` and `updated_at` change whenever the flight changes.
 - `people` lists the crew. Each `person_id` is an id from `GET /people`. The pilot's own id is `self_person_id`.
-- `signature` is `none`, `waived` or `signed`. `attachment_count` is the number of files on the flight. The files and the signature image themselves cannot be reached.
 - `calculated_times` is `null` while Jetlog has not calculated the flight yet. Otherwise it holds whole minutes per figure, with the same figure names as `totals` below, plus `cross_country_distance` and `computed_at`.
 - Removed flights are left out unless you ask for them.
 
@@ -274,7 +284,7 @@ Errors: `400` with `{"error":"invalid_date"}` for a `from`, `to` or `after_date`
 
 ### GET /entries/:id
 
-One flight. The answer is `{"entry": {...}}`. The flight has the same fields as a row of the list above, plus `signature_sha256`. An id that does not exist, belongs to another pilot or was removed answers `404` with `{"error":"not_found"}`.
+One flight. The answer is `{"entry": {...}}`. The flight has the same fields as a row of the list above. An id that does not exist, belongs to another pilot or was removed answers `404` with `{"error":"not_found"}`.
 
 ```sh
 curl -sS https://jetlog.app/api/partner/v1/entries/a8d3f1c2-5e7b-4a9d-b6c4-2f1e0d9c8b7a \
@@ -388,11 +398,7 @@ This flight was added by a partner, with Jetlog's flight tracking on:
       "fstd_senior_instructor_time": null,
       "cross_country_distance": true,
       "computed_at": "2026-09-02T09:15:04Z"
-    },
-    "signature": "none",
-    "signature_attachment_id": null,
-    "attachment_count": 0,
-    "signature_sha256": null
+    }
   }
 }
 ```
@@ -415,8 +421,7 @@ curl -sS https://jetlog.app/api/partner/v1/people \
       "last_name": "Jansen",
       "default_role": "PIC",
       "employee_number": "10432",
-      "is_imported_from_other_logbook": false,
-      "has_photo": false
+      "is_imported_from_other_logbook": false
     },
     {
       "id": "4d6e8a21-95f3-4b7c-a1d2-3e5f60718293",
@@ -424,8 +429,7 @@ curl -sS https://jetlog.app/api/partner/v1/people \
       "last_name": "de Vries",
       "default_role": "FO",
       "employee_number": null,
-      "is_imported_from_other_logbook": false,
-      "has_photo": false
+      "is_imported_from_other_logbook": false
     }
   ]
 }
@@ -497,7 +501,7 @@ A proposal asks the pilot to change something in the logbook. The app sends it, 
 ### The flow end to end
 
 1. The app sends `POST /changes` with a summary and a list of operations. Jetlog checks every operation against the logbook as it is now and stores the proposal with the status `pending`. Nothing in the logbook changes.
-2. Jetlog notifies the pilot. The notification names your app and says how many flights it wants to change. Jetlog writes that text itself from the proposal, and the summary you send is not part of it. The proposal also waits in the pilot's list of changes to review in the Jetlog app.
+2. Jetlog sends the pilot a notification titled "Changes to review", with a text such as "Example Partner wants to change 3 flights." Jetlog writes that text itself, from the name Jetlog registered for your app and the number of operations. Nothing you send is part of it, the summary included. The proposal also waits in the pilot's list of changes to review in the Jetlog app, and tapping the notification opens it.
 3. The pilot opens the proposal in the Jetlog app and sees what every operation would change, before and after. The pilot approves all of it, approves only some of the operations, or rejects it. Reviewing a proposal needs a current version of the Jetlog app.
 4. The app asks `GET /changes/:id` for the status, at a calm pace such as once a minute, until the status is no longer `pending`. The pilot decides at their own speed.
 5. When the pilot approved, the changes are in the logbook. The pilot can still undo an approved change in the Jetlog app.
@@ -574,7 +578,6 @@ The answer is `201` with the proposal:
           "touchdown": "14:55:00",
           "on_blocks": "15:05:00",
           "remarks": null,
-          "signature": "none",
           "is_deleted": false,
           "people": [
             {"person_id": "7b1d1f5c-3a2e-4c8e-9d64-0f6a2b9c1e10", "name": "Sam Jansen", "role": "PIC", "is_self": true}
@@ -593,7 +596,6 @@ The answer is `201` with the proposal:
           "touchdown": "14:55:00",
           "on_blocks": "15:05:00",
           "remarks": null,
-          "signature": "none",
           "is_deleted": false,
           "people": [
             {"person_id": "7b1d1f5c-3a2e-4c8e-9d64-0f6a2b9c1e10", "name": "Sam Jansen", "role": "PIC", "is_self": true}
@@ -622,8 +624,8 @@ The fields of a proposal:
 | `client_kind` | `partner` for every proposal an app makes. |
 | `client_name` | The name Jetlog registered for your app. |
 | `summary` | Your summary, cleaned of control characters and extra white space. |
-| `operations` | Your operations as Jetlog stored them. Each one has an `index` that counts from 0, and every create has an `id`. |
-| `preview` | One item per operation, with the flight, person or other record `before` and `after`, and the `changed_fields`. This is what the pilot reviews. A create has `null` for `before`, and a delete shows `is_deleted` going to `true` in `after`. Each item also has `raw_before`, the previous values in the form Jetlog stores them for undoing a change. The example leaves it out, and an app does not need it. |
+| `operations` | Your operations as Jetlog stored them. Each one has an `index` that counts from 0, and every create has an `id`. Once the proposal is `applied`, each operation also has `applied`, which is `true` when its change was made and `false` when it was not. See [Partial approval](#partial-approval). |
+| `preview` | One item per operation. This is what the pilot reviews. Each item has exactly `index`, `op`, `resource` and `id` (the same as the operation), `before` and `after` (the flight or person as it is and as it would be) and `changed_fields` (the names of the fields that change). A create has `null` for `before`, and a delete shows `is_deleted` going to `true` in `after`. |
 | `counts` | How many operations create, update and delete. After a partial approval it counts what was applied. |
 | `error` | A short reason when the status is `failed`, and `null` otherwise. |
 | `expires_at` | 24 hours after `created_at`. |
@@ -659,7 +661,8 @@ This is the same proposal after the pilot approved it:
         "op": "update",
         "resource": "entry",
         "id": "c1f0a5e4-8b2d-4d7a-9f31-5a6e7b8c9d01",
-        "data": {"registration": "PHBXE"}
+        "data": {"registration": "PHBXE"},
+        "applied": true
       }
     ],
     "preview": [
@@ -681,7 +684,6 @@ This is the same proposal after the pilot approved it:
           "touchdown": "14:55:00",
           "on_blocks": "15:05:00",
           "remarks": null,
-          "signature": "none",
           "is_deleted": false,
           "people": [
             {"person_id": "7b1d1f5c-3a2e-4c8e-9d64-0f6a2b9c1e10", "name": "Sam Jansen", "role": "PIC", "is_self": true}
@@ -700,7 +702,6 @@ This is the same proposal after the pilot approved it:
           "touchdown": "14:55:00",
           "on_blocks": "15:05:00",
           "remarks": null,
-          "signature": "none",
           "is_deleted": false,
           "people": [
             {"person_id": "7b1d1f5c-3a2e-4c8e-9d64-0f6a2b9c1e10", "name": "Sam Jansen", "role": "PIC", "is_self": true}
@@ -728,15 +729,28 @@ This is the same proposal after the pilot approved it:
 | `applied` | The pilot approved it, in full or in part, and the changes are made. |
 | `rejected` | The pilot rejected it. Nothing was changed. |
 | `expired` | Nobody decided within 24 hours. Nothing was changed. |
-| `stale` | When the pilot approved, a flight or person the proposal touches had changed since it was proposed. Nothing was changed. The proposal stays open until it expires or the pilot rejects it, and it still counts as open. Send a new proposal built from current data. |
+| `stale` | When the pilot approved, a flight or person the proposal touches had changed since it was proposed. Nothing was changed. The proposal stays open with a refreshed preview, so the pilot can still approve or reject it, and it still counts as open until it is decided or expires. You can also send a new proposal built from current data. |
 | `failed` | Applying it did not work, for example because a flight it touches was removed in the meantime. Nothing was changed. `error` holds a short reason. |
-| `revoked` | The connection that made the proposal ended before the pilot decided, because the pilot removed the app or the refresh token was revoked. Nothing was changed. A new connection cannot read the proposals of an earlier one, so an app normally never sees this status. |
+| `revoked` | The connection that made the proposal ended before the pilot decided. Nothing was changed. See below. |
 
-Poll until the status is no longer `pending`. Every other status is final, except `stale`, which stays open until the pilot rejects it or the 24 hours pass.
+Poll until the status is no longer `pending`. Every other status is final, except `stale`, which stays open until the pilot decides or the 24 hours pass.
+
+When a connection ends, because the pilot removes the app under Settings > Connected Apps or your app revokes its refresh token, Jetlog marks all open proposals of that connection `revoked`. The token stops working at the same moment, so your app cannot read this status. The status exists for the pilot's side. An app that disconnects a pilot should treat that pilot's open proposals as gone. A new connection of the same pilot cannot read the proposals of the old one either: they answer `404`.
 
 ### Partial approval
 
-The pilot may approve only some of the operations of a proposal. The operations that were left out are not applied and are not offered again. The status is `applied`, and `counts` describes only what was applied. Read the flights again to see what changed. To propose the rest again, send a new proposal.
+The pilot may approve only some of the operations of a proposal. The status is then `applied`, and `counts` describes only what was applied. Each operation says whether it landed in its `applied` field:
+
+```json
+{
+  "operations": [
+    {"index": 0, "op": "create", "resource": "person", "id": "9a2c4e6f-1b3d-4f57-8a9b-0c1d2e3f4a5b", "data": {"first_name": "Lars", "last_name": "Visser"}, "applied": true},
+    {"index": 1, "op": "update", "resource": "entry", "id": "c1f0a5e4-8b2d-4d7a-9f31-5a6e7b8c9d01", "data": {"remarks": "Late departure"}, "applied": false}
+  ]
+}
+```
+
+`applied` is `true` when the change was made. It is `false` when the pilot left the operation out, and also when the operation changed nothing. The operations that were left out are not offered again. To propose them again, send a new proposal. The field appears only once the proposal is `applied`.
 
 Operations that depend on each other can only be approved together. A flight that lists a crew member created in the same proposal needs the operation that creates that person.
 
@@ -764,8 +778,9 @@ The rules:
 - A text value is at most 2000 characters.
 - Jetlog applies people first and flights second, so a flight can refer to a person created in the same proposal.
 - A `delete` removes the flight or person. The pilot can undo an approved delete in the Jetlog app.
-- Use the import route for flights your app added, and for new flights. A proposal is for changes the pilot needs to approve.
-- Fields for files, photos, signatures and signing links are not available to an app. A proposal that sets a signature or a photo, or that uses one of those resources, is refused. Do not send them.
+- A proposal can target any flight of the pilot, including one your app added. The import route changes those flights without approval, so use it for your own flights and new flights, and use a proposal for the rest.
+- Flights your app creates through an approved proposal become its own flights, so the import route can change them afterwards. An approved update to an existing flight does not make that flight the app's own.
+- Files, photos, signatures and signing links are never available to an app. See [What a proposal cannot contain](#what-a-proposal-cannot-contain).
 
 ### Fields of a flight
 
@@ -777,20 +792,43 @@ These are the fields of `data` for `resource` `entry`. Send `type` and `date` wh
 | `date` | `YYYY-MM-DD`. Required on create. |
 | `flight_number` | The flight number. |
 | `registration` | The registration. Jetlog strips separators and uses uppercase. |
-| `from`, `to` | The planned airports, as ICAO codes. |
-| `actual_from`, `actual_to` | The airports actually used, as ICAO codes, when they differ from the plan. |
+| `from`, `to` | The planned airports. Send ICAO codes in capital letters. A proposal stores a code exactly as sent. It does not convert IATA codes to ICAO the way the import route does. |
+| `actual_from`, `actual_to` | The airports actually used, when they differ from the plan. The same rule as `from` and `to`. |
 | `scheduled_off_blocks` | The planned off blocks time, `HH:MM` zulu. |
 | `off_blocks`, `airborne`, `touchdown`, `on_blocks` | The actual times, `HH:MM` zulu. |
 | `update_flight_data` | `true` lets Jetlog fill the actual times from its flight tracking, `false` keeps the times as entered. When you create a flight with any actual time and leave this out, Jetlog sets it to `false` so your times show. An update leaves it as it is unless you send it. |
 | `remarks` | Free text, at most 1000 characters. A proposal can replace existing remarks, which an import never does. The pilot sees the old and the new text before approving. |
 | `people` | The crew, a list of `{"person_id": "...", "role": "..."}`. See below. |
-| `takeoffs_and_landings` | `{"type": "auto", "takeoffs": 1, "landings": 1}`, or `{"type": "manual", "takeoffs_day": 1, "takeoffs_night": 0, "landings_day": 1, "landings_night": 0}`. Always send `type`. |
+| `takeoffs_and_landings` | `{"type": "auto", "takeoffs": 1, "landings": 1}`, or `{"type": "manual", "takeoffs_day": 1, "takeoffs_night": 0, "landings_day": 1, "landings_night": 0}`. Always send `type`. The import route works out the type from the counts you send, and a proposal does not. |
 | `approaches` | A list such as `[{"type": "ils_cat1", "count": 1}]`. The types are the ones in the [README](README.md#payload-schema-shared). |
 | `go_arounds`, `passengers_on_board` | Whole numbers, 0 or more. |
 | `fuel_planned`, `fuel_used`, `cargo_on_board` | Whole numbers of kilograms, 0 or more. |
 | `is_deleted` | `true` removes the flight, the same as a `delete` operation. |
 
 `people` works per person. A person you list is added to the flight or gets the role you send, and a person you leave out stays as they are. To remove a crew member, send them with `"is_deleted": true`. Each `person_id` is the id of a person in the pilot's crew list (`GET /people`), the id of a person your proposal creates, or `SELF` for the pilot. `role` is free text such as `PIC` or `FO`, and it is required.
+
+### What a proposal cannot contain
+
+An app never holds the permissions for files or signatures, so a proposal that touches them is refused when it is made, and again if it is somehow approved. Sending the stored value back, or `null`, does not make an exception. These are refused:
+
+| Where | What | Missing permission |
+| :-- | :-- | :-- |
+| `resource` | `entry_attachment` | `files` |
+| `resource` | `signature_link` | `signatures` |
+| `data` of an `entry` | `signature`, `signature_attachment_id`, `signature_sha256`, `signature_waived` | `signatures` |
+| `data` of a `person` | `photo_attachment_id`, `photo_sha256` | `files` |
+
+The answer is always `403` with a flat body that names the missing permission, and nothing is stored:
+
+```json
+{
+  "error": "insufficient_scope",
+  "message": "Connected apps never get the \"files\" permission. Nothing was changed.",
+  "missing_scopes": ["files"]
+}
+```
+
+For the signature keys and for `signature_link` the message and `missing_scopes` say `"signatures"` instead. A proposal that hits both lists both. Leave these keys and resources out of your proposals.
 
 ### Putting the pilot on a new flight
 
@@ -907,7 +945,9 @@ curl -sS -X POST https://jetlog.app/api/partner/v1/changes \
 
 ## Errors per route
 
-Every route can also answer the errors in [Calling the routes](#calling-the-routes).
+Every route can also answer the access errors in [Who may call a route](#who-may-call-a-route) and `429` as described under [Rate limits](#rate-limits). The status of a proposal is the one route that is never rate limited.
+
+The shape of an error depends on the route. The access errors, the import route and the read routes answer with a flat body, `{"error":"<code>"}`. The proposal routes answer with a nested body, `{"error":{"message":"...","code":"..."}}`, except for the refusal of files and signatures below, which is flat like the access errors and has a `message` and `missing_scopes` next to `error`.
 
 | Route | Status | Body | Meaning |
 | :-- | :-- | :-- | :-- |
@@ -917,10 +957,10 @@ Every route can also answer the errors in [Calling the routes](#calling-the-rout
 | `GET /entries` | `400` | `{"error":"invalid_parameter"}` | `limit` is not a number, or `include_deleted` is not `true` or `false`. |
 | `GET /entries/:id` | `404` | `{"error":"not_found"}` | No such flight for this pilot, or it was removed. |
 | `GET /totals` | `400` | `{"error":"invalid_date"}` | `from` or `to` is not a `YYYY-MM-DD` date. |
-| `POST /changes` | `403` | `{"error":"insufficient_scope", ...}` | The proposal touches something an app can never use, such as a photo. |
+| `POST /changes` | `403` | `{"error":"insufficient_scope","message":"...","missing_scopes":["files"]}` | The proposal touches files, photos, signatures or signing links. See [What a proposal cannot contain](#what-a-proposal-cannot-contain). Nothing was stored. |
 | `POST /changes` | `409` | `{"error":{"message":"Too many open pending changes","code":"open_cap_reached"}}` | The pilot already has 20 open proposals. Wait for the pilot to decide on some, or for them to expire. |
 | `POST /changes` | `413` | `{"error":{"message":"Too many operations (201)","code":"too_many_entries"}}` | More than 200 operations. Nothing was stored. |
-| `POST /changes` | `422` | `{"error":{"message":"Invalid operations","errors":[...]}}` | One or more operations are not valid. Nothing was stored. |
+| `POST /changes` | `422` | `{"error":{"message":"Invalid operations","errors":[...]}}` | One or more operations are not valid, or the summary is missing. Nothing was stored. |
 | `GET /changes/:id` | `404` | `{"error":{"message":"Pending change not found"}}` | No such proposal for this connection. |
 
 `GET /me`, `GET /people` and `GET /aircraft` have no errors of their own.
@@ -954,14 +994,14 @@ A `422` lists what is wrong in `errors`. Each item has the `index` of the operat
 | Access token | 1 hour |
 | Refresh token | 90 days, replaced on every use |
 
-Requests are also limited per pilot over time. When you go over, the route answers `429` with a `Retry-After` header. Wait that many seconds, then send the same request.
+Requests are also limited per pilot over time, as described under [Rate limits](#rate-limits). When you go over, the route answers `429` with a `Retry-After` header. Wait that many seconds, then send the same request.
 
 ## What an app can never do
 
 At either level, an app cannot:
 
 - apply its own proposal. Approving is an action of the pilot in the Jetlog app, and no partner route applies a proposal.
-- read, add or download files, photos and signature images, or create signing links.
+- read, add or download files, photos and signature images, see whether a flight is signed or a person has a photo, or create signing links.
 - call anything outside the routes in this document. A partner token is refused everywhere else.
 - act without the pilot. Every connection is made by a pilot approving it, and the pilot can remove it at any time.
 - read proposals that another connection made.
@@ -970,4 +1010,4 @@ At the own flights level an app also cannot read the logbook or propose changes.
 
 ## The sample app
 
-The [Jetlog sample app](https://github.com/jvdvleuten/jetlog-sample-app) is a small web app that runs the whole flow against a pilot's own account. It sends the authorization request, receives the callback, exchanges the code, reads the logbook and proposes a change, and then follows the proposal until the pilot has decided. It is registered as a partner itself, so you can run it with your own account before your own app is registered, and read its code as a starting point.
+The [Jetlog sample app](https://github.com/jvdvleuten/jetlog-sample-app) is a small web app that runs the whole flow against a pilot's own account. It sends the authorization request, receives the callback, exchanges the code, reads the logbook and proposes a change, and then follows the proposal until the pilot has decided. It is registered as a partner itself, so you can run it with your own account before your own app is registered, and read its code as a starting point. It needs the Jetlog app on an iPhone or iPad with a logbook, to approve the connection in.
