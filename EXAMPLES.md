@@ -171,7 +171,7 @@ curl -X POST https://jetlog.app/api/partner/v1/import \
 
 ### Several flights in one call (deeplink-safe)
 
-Entries are independent: one bad row is reported separately rather than losing the good ones (the API returns it under `skipped`). The token route accepts at most 200 entries per request.
+Entries are independent: one bad row is reported separately rather than losing the good ones (the API returns it under `skipped`). The token route accepts at most 200 entries and 1000 people per request.
 
 ```json
 {

@@ -36,9 +36,9 @@ Sections:
 - The URL. `/api/partner/v1/import` instead of `/external/v1/import`.
 - How a pilot connects. The pilot approves your app in the Jetlog app, instead of copying a key out of it.
 - Lifetime. Access tokens last one hour and refresh tokens 90 days. The keys do not expire.
-- At most 200 entries per request on the token route.
+- At most 200 entries and 1000 people per request on the token route.
 - The pilot does not need the external source selected in Jetlog. The connection is listed under Settings > Connected Apps and works next to a calendar or roster source the pilot has set up.
-- What a token may do is limited to adding flights and changing or deleting the flights your partner registration created. It cannot read the logbook or touch anything else.
+- What a token may do is limited to adding flights with their crew, and changing or deleting the flights your partner registration created. It cannot read the logbook or touch anything else.
 - Calls on the token route do not create an import batch in the pilot's list of imports. They are recorded in the audit log.
 
 ## Key route and token route compared
@@ -51,7 +51,7 @@ Sections:
 | What the partner stores | One partner key for all pilots, one user key per pilot | No shared secret. One refresh token per pilot |
 | Lifetime | Neither key expires | Access token 1 hour. Refresh token 90 days, replaced on every use |
 | What it may do | Add flights, change and delete the flights the partner created | The same, and nothing else |
-| Requests | No cap documented | At most 200 entries |
+| Requests | No cap documented | At most 200 entries and 1000 people |
 | Pilot's source setting in Jetlog | Must be the external source | No requirement |
 | How to disconnect | The pilot changes the source in the Source screen of the Jetlog app | The partner calls the revoke endpoint, or the pilot removes the app under Settings > Connected Apps |
 
@@ -119,7 +119,7 @@ Put one redirect URI in the document for each place a pilot can come back to: on
 
 Email the URL of your metadata document to support@jetlog.app, together with the name pilots should see for your partner. Jetlog links the URL to your existing partner registration, which is why flights you created with the keys stay yours. Jetlog tells you when it is done.
 
-Until then an authorization request for your URL comes back to your callback with `error=unauthorized_client`, and no token is issued. If Jetlog ever disables a partner registration, the token route answers `403` with `integration_disabled` and tokens issued earlier stop working.
+Until then an authorization request for your URL comes back to your callback with `error=unauthorized_client`, and no token is issued. If Jetlog ever disables a partner registration, the token route answers `403` with `integration_disabled` and a refresh answers `unauthorized_client`. Keep the tokens you hold. They work again when the registration is enabled.
 
 ### 3. Build the authorization request
 
@@ -152,6 +152,8 @@ open "$AUTH_URL"    # macOS. On Linux use xdg-open.
 What the pilot sees is described in [A phone app](#a-phone-app). In short, the pilot signs in on the Jetlog page by approving in the Jetlog app, sees who is asking and what the partner may do, and approves.
 
 The sign-in request on the page is valid for ten minutes. The page shows a countdown and offers a new code when it runs out. A pilot who has no phone with the Jetlog app at hand can choose "Use email instead" at the bottom of the page.
+
+Approving in the app needs a current version of Jetlog. An older version shows "Update Jetlog to approve this sign-in". The pilot updates the app and tries again, or uses the email option.
 
 ### 4. Receive the callback
 
@@ -220,7 +222,7 @@ curl -sS -X POST https://jetlog.app/api/partner/v1/import \
 
 The body and the response are the ones described in the [README](README.md) and in [EXAMPLES.md](EXAMPLES.md). Read `skipped` and `warnings` on every response, because a `200` does not mean every row landed.
 
-Send at most 200 entries per request. Include in each request the `people` its entries refer to, because a `ref_id` only has meaning inside one request.
+Send at most 200 entries and 1000 people per request. Include in each request the `people` its entries refer to, because a `ref_id` only has meaning inside one request.
 
 **Refreshing.** The access token lasts one hour. Refresh a minute or so before it expires, or when a call answers `401`:
 
@@ -325,7 +327,7 @@ The redirect URI of a phone app is an https link that your app has claimed (a un
 ### What the pilot sees on the same phone
 
 1. Your app opens the Jetlog page in the system browser sheet. The page is titled "Sign in with the Jetlog app". It shows your name, a two digit number, a QR code, and an "Open in Jetlog" button.
-2. The pilot remembers the number and taps "Open in Jetlog". The Jetlog app opens an approval screen. It names your app, says what your app may do, which is add flights and change or remove the flights it added, and says what it may not do, which is read the logbook or change anything else. It also shows three numbers.
+2. The pilot remembers the number and taps "Open in Jetlog". The Jetlog app opens an approval screen. It names your app, says what your app may do, which is add flights and their crew and change or remove the flights it added, and says what it may not do, which is read the logbook or change anything else. It also shows three numbers.
 3. The pilot taps the number that matches the one on the page and confirms with Face ID or the passcode. A wrong number blocks the request.
 4. The pilot switches back to your app, where the browser sheet is still open. The page now says the request was approved in the Jetlog app and names the account. The pilot taps "Continue".
 5. Jetlog redirects to your https callback. The system closes the sheet and passes the URL to your app, which exchanges the code.
@@ -361,6 +363,7 @@ A pilot who uses your phone app and your server needs one holder of the refresh 
 | `403` | `{"error":"integration_disabled"}` | Jetlog has disabled your partner registration | Stop sending. Email support@jetlog.app |
 | `403` | `{"error":"insufficient_scope"}` | The token does not carry the `import` scope | The pilot connects again with `scope=import` |
 | `413` | `{"error":"too_many_entries","max":200}` | More than 200 entries in one request | Split the payload into requests of at most 200 entries. Nothing was written |
+| `413` | `{"error":"too_many_people","max":1000}` | More than 1000 people in one request | Send only the people the entries in that request refer to. Nothing was written |
 | `429` | A `Retry-After` header, in seconds, and `{"error":"rate_limited","retry_after":n}` | Too many requests for this pilot | Wait for `Retry-After`, then send the same request. Send one pilot's imports one after another |
 | `400` | `{"error":"<code>"}`, for example `invalid_payload` | The payload could not be imported as a whole | Fix the payload. Nothing was written |
 | `400` for a body that is not valid JSON, and any `5xx` | `{"errors":{"detail":"<status text>"}}` | The request could not be read, or something failed on the Jetlog side | Fix the request body. After a `5xx`, resend the same payload. It is safe, because matching applies the same rows again |
@@ -379,6 +382,7 @@ On the authorization and token endpoints:
 | Authorization, redirect with `error=invalid_request`, `unsupported_response_type` or `invalid_target` | A parameter is wrong | `code_challenge_method` has to be `S256`, `response_type` has to be `code`, `resource` has to be `https://jetlog.app/api/partner/v1` |
 | Token, `400` `{"error":"invalid_grant"}` on a code | The code expired (60 seconds), was already used, or something does not match: `client_id`, `redirect_uri`, `code_verifier` or `resource` | Start the authorization again |
 | Token, `400` `{"error":"invalid_grant"}` on a refresh | The refresh token is unknown, already used, expired, or revoked, or the pilot disconnected or signed out everywhere | The pilot connects again |
+| Token, `400` `{"error":"unauthorized_client"}` on a refresh | Jetlog has disabled your partner registration | Keep the stored tokens and stop syncing. Email support@jetlog.app. The same refresh token works again once the registration is enabled |
 | Token, `400` `{"error":"invalid_request"}` or `{"error":"unsupported_grant_type"}` | `grant_type` is missing or not one of `authorization_code` and `refresh_token` | Fix the request |
 | Token or revoke, `429` | A `Retry-After` header and `{"error":"rate_limited","retry_after":n}` | Wait, then try again |
 
@@ -386,7 +390,7 @@ On the authorization and token endpoints:
 
 Both routes work. The payload is the same, so you can move pilots one at a time.
 
-The key route keeps working unchanged, and every response from it carries these headers:
+The key route keeps working unchanged, and its responses carry these headers:
 
 ```
 Deprecation: true
@@ -419,7 +423,7 @@ You can repeat the same payload on the token route that you sent on the key rout
 - [ ] Tokens live in the Keychain, the Android Keystore or encrypted server storage, and not in logs.
 - [ ] One refresh at a time per pilot, and the new refresh token is saved before the response is used.
 - [ ] A `401` triggers one refresh and one retry. A failed refresh moves the pilot to "not connected".
-- [ ] Requests have at most 200 entries, include the `people` they refer to, and wait out `Retry-After` on a `429`.
+- [ ] Requests have at most 200 entries and 1000 people, include the `people` they refer to, and wait out `Retry-After` on a `429`.
 - [ ] `skipped` and `warnings` are read on every response.
 - [ ] Disconnecting calls the revoke endpoint and deletes the stored tokens.
 - [ ] Pilots still on a key keep using it until they move, and are moved the next time they open the app.

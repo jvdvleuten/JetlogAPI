@@ -288,7 +288,7 @@ Content-Type: application/json
 Authorization: Bearer <access_token>
 ```
 
-Send at most 200 entries per request, together with the `people` those entries refer to. The errors that belong to this route:
+Send at most 200 entries and 1000 people per request, with the `people` those entries refer to. The errors that belong to this route:
 
 | Status | Body | Meaning |
 | :-- | :-- | :-- |
@@ -296,6 +296,7 @@ Send at most 200 entries per request, together with the `people` those entries r
 | `403` | `{"error":"integration_disabled"}` | The partner registration is switched off. |
 | `403` | `{"error":"insufficient_scope"}` | The token does not carry the `import` scope. |
 | `413` | `{"error":"too_many_entries","max":200}` | More than 200 entries in one request. Nothing is written. |
+| `413` | `{"error":"too_many_people","max":1000}` | More than 1000 people in one request. Nothing is written. |
 | `429` | `Retry-After` header | Too many requests. Wait that many seconds. |
 
 Entries created through the older key authentication stay the partner's own after it switches to tokens, so a token can amend or delete them.
@@ -396,9 +397,9 @@ curl -X POST https://jetlog.app/external/v1/import \
   -d @payload.json
 ```
 
-Every response from this route carries `Deprecation: true` and a `Link` header with `rel="deprecation"` that points to [MIGRATION.md](MIGRATION.md). No cut-off date is set. When one is, it will be announced, responses will also carry a `Sunset` header, and after that moment the route answers `410` with `{"error":"legacy_auth_removed"}`. Entries created with the keys stay owned by the same partner when it switches to tokens.
+Responses from this route carry `Deprecation: true` and a `Link` header with `rel="deprecation"` that points to [MIGRATION.md](MIGRATION.md). No cut-off date is set. When one is, it will be announced, responses will also carry a `Sunset` header, and after that moment the route answers `410` with `{"error":"legacy_auth_removed"}`. Entries created with the keys stay owned by the same partner when it switches to tokens.
 
 ## Tips
 - Keep `ref_id` unique in `people`; reuse in `entries[*].people`.
 - Use UTC for times; `date` is `YYYY-MM-DD`.
-- Batch large external imports (at most 200 entries per request on the token route); split deeplinks if URLs get too long.
+- Batch large external imports (at most 200 entries and 1000 people per request on the token route); split deeplinks if URLs get too long.
