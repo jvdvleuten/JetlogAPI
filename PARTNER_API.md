@@ -852,7 +852,7 @@ The rules:
 - A `delete` removes the flight or person. The pilot can undo an approved delete in the Jetlog app.
 - A proposal can target any flight of the pilot, including one your app added. The import route changes those flights without approval, so use it for your own flights and new flights, and use a proposal for the rest.
 - Flights your app creates through an approved proposal become its own flights, so the import route can change them afterwards. An approved update to an existing flight does not make that flight the app's own.
-- The rules about what a proposal may contain are checked when the proposal is made and again when the pilot approves it: the resources, the fields and their sizes, the flight type, no `data` on a `delete`, and a true or false `is_deleted`. Two checks are made only when the proposal is made: that an `update` or `delete` targets a flight or crew member the read routes can show, and that the logbook would show the value you proposed. At approval Jetlog checks instead that the connection is still live, that your app still has the whole logbook level, and that nothing the proposal touches changed since it was made. A change since then makes the status `stale`, see [Statuses](#statuses).
+- The rules about what a proposal may contain are checked when the proposal is made and again when the pilot approves it: the resources, the fields and their sizes, the flight type, no `data` on a `delete`, no other field next to `"is_deleted": true`, and a true or false `is_deleted`. Two checks are made only when the proposal is made: that an `update` or `delete` targets a flight or crew member the read routes can show, and that the logbook would show the value you proposed. At approval Jetlog checks instead that the connection is still live, that your app still has the whole logbook level, and that nothing the proposal touches changed since it was made. A change since then makes the status `stale`, see [Statuses](#statuses).
 
 ### What a proposal may contain
 
@@ -880,7 +880,7 @@ These are the fields of `data` for `resource` `entry`. Send `type` and `date` wh
 | `off_blocks`, `airborne`, `touchdown`, `on_blocks` | The actual times, `HH:MM` zulu. |
 | `remarks` | Free text, at most 1000 characters. A proposal can replace existing remarks, which an import never does. The pilot sees the old and the new text before approving. |
 | `people` | The crew, a list of at most 20 objects `{"person_id": "...", "role": "..."}`. See below. |
-| `is_deleted` | `true` removes the flight, the same as a `delete` operation. It has to be a JSON boolean, so `"true"` and `1` are refused. An `update` that sets it to `true` is a deletion for the pilot: the preview shows a delete and `counts` counts a deletion. |
+| `is_deleted` | `true` removes the flight, the same as a `delete` operation. It has to be a JSON boolean, so `"true"` and `1` are refused. To remove a flight, send a `delete` without `data`, or an `update` whose `data` is only `"is_deleted": true`. An operation that sets it to `true` carries no other field, whichever way it is sent, because the pilot reviews a deletion as the flight that goes away and has nothing else to look at. Any other key next to it is refused with a `422` that names the key. Either way the preview shows a delete and `counts` counts a deletion. |
 
 `people` works per person. A person you list is added to the flight or gets the role you send, and a person you leave out stays as they are. To remove a crew member, send them with `"is_deleted": true`. A crew member is an object with only `person_id`, `role` and optionally `is_deleted`. Each `person_id` is the id of a person in the pilot's crew list (`GET /people`), the id of a person your proposal creates, or `SELF` for the pilot. `role` is free text such as `PIC` or `FO`, and it is required.
 
@@ -894,7 +894,7 @@ These are the fields of `data` for `resource` `person`.
 | `default_role` | The role Jetlog suggests for this person. |
 | `employee_number` | An employee number. |
 | `is_imported_from_other_logbook` | `true` when the person came from another logbook. |
-| `is_deleted` | `true` removes the person, the same as a `delete` operation. It has to be a JSON boolean, like on a flight. |
+| `is_deleted` | `true` removes the person, the same as a `delete` operation. It has to be a JSON boolean, like on a flight, and an `update` that sets it to `true` carries no other field in `data`. |
 
 Creating a person does not look for an existing one, so read `GET /people` first and use the id of a person who is already there.
 
@@ -930,6 +930,7 @@ The answer is the nested `422` body of [Errors per route](#errors-per-route), wi
 | The key itself, for example `remarks` | `must be a single value` |
 | `is_deleted` | `must be true or false` |
 | The key itself, for example `flight_number`, in the `data` of a `delete` | `a delete carries no data, flight_number is not allowed` |
+| The key itself, for example `flight_number`, next to `"is_deleted": true` in the `data` of an `update` | `a deletion carries no other data, flight_number is not allowed` |
 
 ### What a proposal cannot contain
 
