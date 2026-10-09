@@ -4,11 +4,13 @@
 
 Two ways to bring flights into Jetlog:
 - **Deeplink (jetlog://import?data=…)** – for end users/scripts that can open the Jetlog app.
-- **External Partner API (https://jetlog.app/api/partner/v1/import)**: an HTTP endpoint for partners, meaning apps and services that send flights on behalf of pilots. Each pilot approves the partner once in the Jetlog app, and the partner calls the endpoint with an OAuth access token.
+- **External Partner API (https://jetlog.app/api/partner/v1/import)**: an HTTP endpoint for partners, meaning apps and services that send flights on behalf of pilots. Each pilot approves the partner once in the Jetlog app, and the partner calls the endpoint with an OAuth access token. The pilot chooses between two access levels when approving: the partner's own flights only, or the whole logbook, which also lets the partner read the logbook and propose changes that the pilot approves in the Jetlog app. Everything a connected partner can call is in **[PARTNER_API.md](PARTNER_API.md)**.
 
 The **JSON payload is the same** for both flows (see "Payload schema" below).
 
-**Auth, in one line:** External Partner API calls send `Authorization: Bearer <access_token>`. The partner gets the token by sending the pilot through an OAuth authorization code flow with PKCE, which the pilot approves in the Jetlog app. The short version is under [External Partner API](#external-partner-api) in the Reference part below, and every request and error is in **[MIGRATION.md](MIGRATION.md)**.
+**Auth, in one line:** External Partner API calls send `Authorization: Bearer <access_token>`. The partner gets the token by sending the pilot through an OAuth authorization code flow with PKCE, which the pilot approves in the Jetlog app. The pilot picks the access level in that approval, as described in [PARTNER_API.md](PARTNER_API.md#access-levels). The short version is under [External Partner API](#external-partner-api) in the Reference part below, and every request and error is in **[MIGRATION.md](MIGRATION.md)**.
+
+A small [sample app](https://github.com/jvdvleuten/jetlog-sample-app) runs the whole partner flow against a pilot's own account.
 
 The earlier authentication with `Bearer <user_key>:<partner_key>` on `/external/v1/import` is **deprecated** but still works. It is described under [Deprecated: key authentication](#deprecated-key-authentication).
 
@@ -270,12 +272,19 @@ This same payload also imports unmodified through the External Partner API, sinc
 
 **Authentication**
 
-A partner sends the access token a pilot approved: `Authorization: Bearer <access_token>`. A token can add flights and can change or delete the flights the partner created. It cannot read the logbook or change anything else.
+A partner sends the access token a pilot approved: `Authorization: Bearer <access_token>`. The pilot chooses one of two access levels when approving.
+
+| Level | Scope | What the token can do |
+| :-- | :-- | :-- |
+| Own flights | `import` | Add flights, and change or delete the flights the partner created, through the import route below. It cannot read the logbook or change anything else. |
+| Whole logbook | `import read write` | The same, plus reading the logbook and proposing changes to anything in it. A proposal changes nothing until the pilot approves it in the Jetlog app. |
+
+The partner asks for `scope=import` or `scope=import read write`, and the `scope` of the token response says what the pilot granted, which can be less than was asked. Jetlog enables the whole logbook level for each partner separately. The read routes, the proposals and all their errors are in [PARTNER_API.md](PARTNER_API.md).
 
 How a partner gets a token, in short:
 1. Host a metadata document (a small JSON file) on your own domain and send its URL to support@jetlog.app to be registered. The URL is your `client_id`.
-2. Send the pilot to `https://jetlog.app/oauth/authorize` with `response_type=code`, your `client_id`, a `redirect_uri` from the document, `scope=import`, `resource=https://jetlog.app/api/partner/v1`, a `state` and a PKCE S256 `code_challenge`. The pilot approves in the Jetlog app.
-3. Exchange the code at `https://jetlog.app/oauth/token`. The answer holds an access token (valid for 1 hour) and a refresh token (valid for 90 days, replaced on every use).
+2. Send the pilot to `https://jetlog.app/oauth/authorize` with `response_type=code`, your `client_id`, a `redirect_uri` from the document, `scope=import` (or `scope=import read write` to let the pilot choose the whole logbook level), `resource=https://jetlog.app/api/partner/v1`, a `state` and a PKCE S256 `code_challenge`. The pilot approves in the Jetlog app.
+3. Exchange the code at `https://jetlog.app/oauth/token`. The answer holds an access token (valid for 1 hour), a refresh token (valid for 90 days, replaced on every use) and the granted `scope`.
 4. Call the endpoint below with the access token. When it expires, or a call answers `401`, refresh at the same token endpoint. When the refresh fails, the pilot connects again.
 5. To disconnect a pilot, send the refresh token to `https://jetlog.app/oauth/revoke`.
 

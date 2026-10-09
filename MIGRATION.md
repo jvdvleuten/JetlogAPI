@@ -1,6 +1,6 @@
 # Moving to token authentication
 
-This guide is for partners that send flights to Jetlog with the key pair, `Authorization: Bearer <user_key>:<partner_key>` on `/external/v1/import`. It is also the complete description of the token flow for a partner that starts from scratch.
+This guide is for partners that send flights to Jetlog with the key pair, `Authorization: Bearer <user_key>:<partner_key>` on `/external/v1/import`. It is also the complete description of the token flow for a partner that starts from scratch. It uses the own flights level, which gives the access the key pair gives. The wider level, with reading and proposals, is described in [PARTNER_API.md](PARTNER_API.md).
 
 Words used in this guide:
 
@@ -13,12 +13,13 @@ Sections:
 
 1. [What changes and what stays the same](#what-changes-and-what-stays-the-same)
 2. [Key route and token route compared](#key-route-and-token-route-compared)
-3. [The steps](#the-steps)
-4. [A phone app](#a-phone-app)
-5. [A server](#a-server)
-6. [Errors on the token route](#errors-on-the-token-route)
-7. [Running both routes side by side](#running-both-routes-side-by-side)
-8. [Checklist](#checklist)
+3. [Access levels](#access-levels)
+4. [The steps](#the-steps)
+5. [A phone app](#a-phone-app)
+6. [A server](#a-server)
+7. [Errors on the token route](#errors-on-the-token-route)
+8. [Running both routes side by side](#running-both-routes-side-by-side)
+9. [Checklist](#checklist)
 
 ## What changes and what stays the same
 
@@ -27,7 +28,7 @@ Sections:
 - The payload. `entries` and `people` follow the schema in the [README](README.md), with the same field rules, the same `null` handling and the same allowlists.
 - Matching. An entry is matched per pilot on `date + flight_number + from + to`, exactly as on the key route.
 - The response. A successful call returns `{"data": "OK", "skipped": [...]}`, plus `warnings` when there is something to report. The skip reasons are unchanged.
-- A partner only ever changes entries it created. Entries written by the pilot, by a roster import or by another partner are never modified and come back as `duplicate`.
+- On the import route a partner only ever changes entries it created. Entries written by the pilot, by a roster import or by another partner are never modified and come back as `duplicate`.
 - Entries you created with the key pair stay yours after you switch. Both routes attribute flights to the same partner registration, so a token can amend or delete a flight you sent earlier with a key.
 
 **Changes**
@@ -38,7 +39,7 @@ Sections:
 - Lifetime. Access tokens last one hour and refresh tokens 90 days. The keys do not expire.
 - At most 200 entries and 1000 people per request on the token route.
 - The pilot does not need the external source selected in Jetlog. The connection is listed under Settings > Connected Apps and works next to a calendar or roster source the pilot has set up.
-- What a token may do is limited to adding flights with their crew, and changing or deleting the flights your partner registration created. It cannot read the logbook or touch anything else.
+- With `scope=import`, what a token may do is what the key pair may do: add flights with their crew, and change or delete the flights your partner registration created. It cannot read the logbook or touch anything else. A wider level exists and is optional, see [Access levels](#access-levels).
 - Calls on the token route do not create an import batch in the pilot's list of imports. They are recorded in the audit log.
 
 ## Key route and token route compared
@@ -50,10 +51,22 @@ Sections:
 | How a pilot connects | The pilot enables the external source in Jetlog and hands the user key to the partner | The partner starts an authorization request and the pilot approves it in the Jetlog app |
 | What the partner stores | One partner key for all pilots, one user key per pilot | No shared secret. One refresh token per pilot |
 | Lifetime | Neither key expires | Access token 1 hour. Refresh token 90 days, replaced on every use |
-| What it may do | Add flights, change and delete the flights the partner created | The same, and nothing else |
+| What it may do | Add flights, change and delete the flights the partner created | The same with `scope=import`. A wider level is optional, see [Access levels](#access-levels) |
 | Requests | No cap documented | At most 200 entries and 1000 people |
 | Pilot's source setting in Jetlog | Must be the external source | No requirement |
 | How to disconnect | The pilot changes the source in the Source screen of the Jetlog app | The partner calls the revoke endpoint, or the pilot removes the app under Settings > Connected Apps |
+
+## Access levels
+
+A pilot approves a partner at one of two levels. A request with `scope=import` gives the own flights level, which is exactly the access the key pair gives: add flights, and change or remove the flights the partner added. Nothing in this guide changes for a partner that asks for `scope=import`, and it is all a partner moving from the key pair needs.
+
+The wider level is optional. It is called whole logbook, and a partner asks for it with `scope=import read write`. It adds reading the logbook and proposing changes that the pilot approves in the Jetlog app. Three things to know before asking for it:
+
+- Jetlog enables it for each partner separately. Say so in the email of [step 2](#2-register-the-url). A partner that is not enabled is offered the own flights level only, whatever it asks for.
+- The pilot chooses the level when approving, so a partner can receive less than it asked for. The `scope` in the token response says what was granted.
+- A partner that gets `scope=import` back works exactly as described in this guide.
+
+The routes, the proposals and their errors are in [PARTNER_API.md](PARTNER_API.md).
 
 ## The steps
 
@@ -79,7 +92,7 @@ The endpoints:
 
 These endpoints are also listed in the standard discovery document at `https://jetlog.app/.well-known/oauth-authorization-server`.
 
-Two fixed values appear in every request below. The **scope** is `import`. The **resource** is `https://jetlog.app/api/partner/v1`, which names the token route as the place the token is meant for. A token that was issued for another resource is refused on the token route.
+Two fixed values appear in every request below. The **scope** is `import`, which gives the access of the key pair. The **resource** is `https://jetlog.app/api/partner/v1`, which names the token route as the place the token is meant for. A token that was issued for another resource is refused on the token route.
 
 Jetlog has no client secrets. Your identity is the URL of your metadata document, and PKCE protects the authorization code.
 
@@ -117,7 +130,7 @@ Put one redirect URI in the document for each place a pilot can come back to: on
 
 ### 2. Register the URL
 
-Email the URL of your metadata document to support@jetlog.app, together with the name pilots should see for your partner. Jetlog links the URL to your existing partner registration, which is why flights you created with the keys stay yours. Jetlog tells you when it is done.
+Email the URL of your metadata document to support@jetlog.app, together with the name pilots should see for your partner. If your app is going to ask for the whole logbook level, say so in the same email. Jetlog links the URL to your existing partner registration, which is why flights you created with the keys stay yours. Jetlog tells you when it is done.
 
 Until then an authorization request for your URL comes back to your callback with `error=unauthorized_client`, and no token is issued. If Jetlog ever disables a partner registration, the token route answers `403` with `integration_disabled` and a refresh answers `unauthorized_client`. Keep the tokens you hold. They work again when the registration is enabled.
 
@@ -143,7 +156,7 @@ open "$AUTH_URL"    # macOS. On Linux use xdg-open.
 | `response_type` | `code` |
 | `client_id` | The URL of your metadata document |
 | `redirect_uri` | One of the `redirect_uris` in the document, copied exactly |
-| `scope` | `import`. Jetlog grants exactly `import`, whatever else is asked |
+| `scope` | `import` for the access of the key pair. `import read write` lets the pilot choose a wider level, see [Access levels](#access-levels) |
 | `state` | A random value you check again on the callback |
 | `code_challenge` | The S256 challenge of your verifier |
 | `code_challenge_method` | `S256`. The `plain` method does not exist |
@@ -189,7 +202,7 @@ curl -sS -X POST https://jetlog.app/oauth/token \
   --data-urlencode "resource=https://jetlog.app/api/partner/v1"
 ```
 
-The `redirect_uri` is the same string you used in the authorization request. The endpoint also accepts a JSON body with the same fields. The response:
+The `redirect_uri` is the same string you used in the authorization request. The endpoint also accepts a JSON body with the same fields. The `scope` in the response says what was granted. After a request with `scope=import` it is always `import`. The response:
 
 ```json
 {
@@ -327,7 +340,7 @@ The redirect URI of a phone app is an https link that your app has claimed (a un
 ### What the pilot sees on the same phone
 
 1. Your app opens the Jetlog page in the system browser sheet. The page is titled "Sign in with the Jetlog app". It shows your name, a two digit number, a QR code, and an "Open in Jetlog" button.
-2. The pilot remembers the number and taps "Open in Jetlog". The Jetlog app opens an approval screen. It names your app, says what your app may do, which is add flights and their crew and change or remove the flights it added, and says what it may not do, which is read the logbook or change anything else. It also shows three numbers.
+2. The pilot remembers the number and taps "Open in Jetlog". The Jetlog app opens an approval screen. For a request with `scope=import` it names your app, says what your app may do, which is add flights and their crew and change or remove the flights it added, and says what it may not do, which is read the logbook or change anything else. For a request that asks for the whole logbook level it offers the pilot a choice between that level and your own flights only. It also shows three numbers.
 3. The pilot taps the number that matches the one on the page and confirms with Face ID or the passcode. A wrong number blocks the request.
 4. The pilot switches back to your app, where the browser sheet is still open. The page now says the request was approved in the Jetlog app and names the account. The pilot taps "Continue".
 5. Jetlog redirects to your https callback. The system closes the sheet and passes the URL to your app, which exchanges the code.
@@ -416,7 +429,7 @@ You can repeat the same payload on the token route that you sent on the key rout
 - [ ] The metadata document is served over https, answers `200` without redirects, and its `client_id` equals its own URL.
 - [ ] `client_name` is printable ASCII of at most 64 characters, and every redirect URI is https.
 - [ ] The URL is sent to support@jetlog.app and confirmed as registered.
-- [ ] Every authorization request has a fresh `state` and a fresh S256 code challenge, and carries `scope=import` and `resource=https://jetlog.app/api/partner/v1`.
+- [ ] Every authorization request has a fresh `state` and a fresh S256 code challenge, and carries the `scope` your app needs (`import` for the access of the key pair) and `resource=https://jetlog.app/api/partner/v1`.
 - [ ] The callback checks `state` and `iss`, and handles `error=access_denied`.
 - [ ] The code is exchanged within 60 seconds, with the same `redirect_uri` and the stored verifier.
 - [ ] Phone app: system browser, https callback that the app has claimed, no custom scheme.
