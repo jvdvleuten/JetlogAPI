@@ -23,6 +23,8 @@ flows; see the README's schema table for specifics.
 Times are `HH:MM` zulu relative to `date`. Dates are strictly `YYYY-MM-DD` —
 `01-03-2026` is rejected by both flows.
 
+The curl calls send the payload to the token route, `https://jetlog.app/api/partner/v1/import`, and expect an access token the pilot approved in `$ACCESS_TOKEN`. How a partner gets that token is in [MIGRATION.md](MIGRATION.md). The deprecated key route, `/external/v1/import`, takes the same payloads.
+
 ---
 
 ### Minimal flight (deeplink-safe)
@@ -45,8 +47,8 @@ The smallest payload that satisfies both flows: identity for the deeplink, route
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-14","flight_number":"KL1023","from":"EHAM","to":"EGLL"}],"people":[]}'
 ```
@@ -102,8 +104,8 @@ All entry fields both flows accept, including the planned times, remarks, approa
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-14","flight_number":"KL1023","scheduled_off_blocks":"14:00","scheduled_on_blocks":"15:10","registration":"PH-BXD","from":"EHAM","to":"EGLL","off_blocks":"14:08","airborne":"14:28","touchdown":"14:55","on_blocks":"15:05","takeoffs_and_landings":{"takeoffs":1,"landings":1},"approaches":[{"type":"ils_cat2","count":1}],"go_arounds":0,"passengers_on_board":178,"fuel_planned":8400,"fuel_used":7950,"remarks":"Line check. CAT II approach.","update_flight_data":false,"people":[{"ref_id":"SELF","role":"PIC"}]}],"people":[]}'
 ```
@@ -159,8 +161,8 @@ curl -X POST https://jetlog.app/external/v1/import \
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-15","flight_number":"KL1024","from":"EGLL","to":"EHAM","people":[{"ref_id":"SELF","role":"PIC"},{"ref_id":"FO1","role":"FO"},{"ref_id":"CA1","role":"Purser"}]}],"people":[{"ref_id":"FO1","first_name":"Fantas","last_name":"Tico","default_role":"FO","employee_number":"00923"},{"ref_id":"CA1","first_name":"Sally","last_name":"Skyway","default_role":"Purser","employee_number":"01556"}]}'
 ```
@@ -169,7 +171,7 @@ curl -X POST https://jetlog.app/external/v1/import \
 
 ### Several flights in one call (deeplink-safe)
 
-Entries are independent: one bad row is reported separately rather than losing the good ones (the API returns it under `skipped`).
+Entries are independent: one bad row is reported separately rather than losing the good ones (the API returns it under `skipped`). The token route accepts at most 200 entries and 1000 people per request.
 
 ```json
 {
@@ -198,8 +200,8 @@ Entries are independent: one bad row is reported separately rather than losing t
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-16","flight_number":"KL1601","from":"EHAM","to":"LEMD","off_blocks":"07:05","on_blocks":"09:40"},{"type":"flight","date":"2026-08-16","flight_number":"KL1602","from":"LEMD","to":"EHAM","off_blocks":"10:25","on_blocks":"13:00"}],"people":[]}'
 ```
@@ -227,8 +229,8 @@ Re-send the same identity with remarks. The API stores remarks only on the entry
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-14","flight_number":"KL1023","from":"EHAM","to":"EGLL","remarks":"Diverted to EGKK for weather."}],"people":[]}'
 ```
@@ -260,8 +262,8 @@ Given an entry already imported with `"off_blocks": "07:05"`, this clears it:
 Expected result: the matched entry's `off_blocks` clears to empty; every other stored field (e.g. `on_blocks`) is untouched. On the API this syncs to other devices like any edit, and only ever lands on an entry this same partner imported. In the app, the deeplink's import preview shows the change as `"07:05" → "(empty)"` before anything is written.
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-16","flight_number":"KL1601","from":"EHAM","to":"LEMD","off_blocks":null}],"people":[]}'
 ```
@@ -289,8 +291,8 @@ Only ever affects an entry this caller created. Send `"is_deleted": false` with 
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-14","flight_number":"KL1023","from":"EHAM","to":"EGLL","is_deleted":true}],"people":[]}'
 ```
@@ -326,8 +328,8 @@ The `"type"` key inside `takeoffs_and_landings` is optional, and both flows reso
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-17","flight_number":"KL1701","from":"EHAM","to":"LTFM","takeoffs_and_landings":{"type":"manual","takeoffs_day":1,"takeoffs_night":0,"landings_day":0,"landings_night":1}}],"people":[]}'
 ```
@@ -368,8 +370,8 @@ Typed approach counts, go-arounds, passengers on board and fuel figures. `approa
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-15","flight_number":"KL1613","from":"EHAM","to":"LPPT","approaches":[{"type":"ils_cat1","count":2},{"type":"rnp","count":1}],"go_arounds":1,"passengers_on_board":178,"fuel_planned":8400,"fuel_used":7950}],"people":[]}'
 ```
@@ -385,8 +387,8 @@ Three-letter codes are converted when recognised, so this stores `EHAM` → `WMK
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-18","flight_number":"KL809","from":"AMS","to":"KUL"}],"people":[]}'
 ```
@@ -421,8 +423,8 @@ no actual time is supplied to infer it.
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-20","flight_number":"KL1055","from":"EHAM","to":"EGLL","actual_to":"EGKK","update_flight_data":false}],"people":[]}'
 ```
@@ -498,6 +500,9 @@ separate transactions, people first, so a batch that later fails while
 processing `entries` can still leave newly-created `people` rows behind. It's
 safe to resend the same payload — those people will match on the retry
 instead of being duplicated.
+
+The errors that come from authentication and limits on the token route (`401`,
+`403`, `413` and `429`) are listed in [MIGRATION.md](MIGRATION.md#errors-on-the-token-route).
 
 ---
 

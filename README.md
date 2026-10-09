@@ -4,11 +4,13 @@
 
 Two ways to bring flights into Jetlog:
 - **Deeplink (jetlog://import?data=…)** – for end users/scripts that can open the Jetlog app.
-- **External Partner API (https://jetlog.app/external/v1/import)** – HTTP endpoint with dual-key auth (`Bearer <user_key>:<partner_key>`).
+- **External Partner API (https://jetlog.app/api/partner/v1/import)**: an HTTP endpoint for partners, meaning apps and services that send flights on behalf of pilots. Each pilot approves the partner once in the Jetlog app, and the partner calls the endpoint with an OAuth access token.
 
 The **JSON payload is the same** for both flows (see "Payload schema" below).
 
-**Auth, in one line:** External Partner API calls send `Authorization: Bearer <user_key>:<partner_key>` — `user_key` is server-generated when a user enables the external source, `partner_key` is issued per integration. Full details are under [External Partner API](#external-partner-api) in the Reference part below.
+**Auth, in one line:** External Partner API calls send `Authorization: Bearer <access_token>`. The partner gets the token by sending the pilot through an OAuth authorization code flow with PKCE, which the pilot approves in the Jetlog app. The short version is under [External Partner API](#external-partner-api) in the Reference part below, and every request and error is in **[MIGRATION.md](MIGRATION.md)**.
+
+The earlier authentication with `Bearer <user_key>:<partner_key>` on `/external/v1/import` is **deprecated** but still works. It is described under [Deprecated: key authentication](#deprecated-key-authentication).
 
 **The minimal payload** — identity for the deeplink, route for the API, nothing else required:
 
@@ -28,8 +30,8 @@ The **JSON payload is the same** for both flows (see "Payload schema" below).
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"entries":[{"type":"flight","date":"2026-08-14","flight_number":"KL1023","from":"EHAM","to":"EGLL"}],"people":[]}'
 ```
@@ -267,16 +269,37 @@ This same payload also imports unmodified through the External Partner API, sinc
 ### External Partner API
 
 **Authentication**
-- Header: `Authorization: Bearer <user_key>:<partner_key>`
-- `user_key`: server-generated when a user enables the external source.
-- `partner_key`: issued per integration.
+
+A partner sends the access token a pilot approved: `Authorization: Bearer <access_token>`. A token can add flights and can change or delete the flights the partner created. It cannot read the logbook or change anything else.
+
+How a partner gets a token, in short:
+1. Host a metadata document (a small JSON file) on your own domain and send its URL to support@jetlog.app to be registered. The URL is your `client_id`.
+2. Send the pilot to `https://jetlog.app/oauth/authorize` with `response_type=code`, your `client_id`, a `redirect_uri` from the document, `scope=import`, `resource=https://jetlog.app/api/partner/v1`, a `state` and a PKCE S256 `code_challenge`. The pilot approves in the Jetlog app.
+3. Exchange the code at `https://jetlog.app/oauth/token`. The answer holds an access token (valid for 1 hour) and a refresh token (valid for 90 days, replaced on every use).
+4. Call the endpoint below with the access token. When it expires, or a call answers `401`, refresh at the same token endpoint. When the refresh fails, the pilot connects again.
+5. To disconnect a pilot, send the refresh token to `https://jetlog.app/oauth/revoke`.
+
+The redirect URI of a phone app is an https link the app has claimed, and the redirect URI of a server is an ordinary https callback. Custom schemes are not accepted. The metadata document, the PKCE values, phone apps, servers and refresh rules are covered in [MIGRATION.md](MIGRATION.md).
 
 **Endpoint**
 ```
-POST /external/v1/import
+POST /api/partner/v1/import
 Content-Type: application/json
-Authorization: Bearer <user_key>:<partner_key>
+Authorization: Bearer <access_token>
 ```
+
+Send at most 200 entries and 1000 people per request, with the `people` those entries refer to. The errors that belong to this route:
+
+| Status | Body | Meaning |
+| :-- | :-- | :-- |
+| `401` | `{"error":"invalid_token"}` | The token is missing, unknown, expired, revoked, or meant for another resource. Refresh it once; if that fails, the pilot connects again. |
+| `403` | `{"error":"integration_disabled"}` | The partner registration is switched off. |
+| `403` | `{"error":"insufficient_scope"}` | The token does not carry the `import` scope. |
+| `413` | `{"error":"too_many_entries","max":200}` | More than 200 entries in one request. Nothing is written. |
+| `413` | `{"error":"too_many_people","max":1000}` | More than 1000 people in one request. Nothing is written. |
+| `429` | `Retry-After` header | Too many requests. Wait that many seconds. |
+
+Entries created through the older key authentication stay the partner's own after it switches to tokens, so a token can amend or delete them.
 
 **Behavior**
 - Entry match: per user by `date + flight_number + from + to`; updates or creates accordingly.
@@ -324,8 +347,8 @@ Rows are independent: a skipped, deleted, or invalid row never prevents the rest
 ```
 
 ```sh
-curl -X POST https://jetlog.app/external/v1/import \
-  -H "Authorization: Bearer USER_KEY:PARTNER_KEY" \
+curl -X POST https://jetlog.app/api/partner/v1/import \
+  -H "Authorization: Bearer $ACCESS_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
     "entries":[
@@ -353,7 +376,30 @@ This payload is also deeplink-valid — clicking it opens the same import in the
 
 Full worked examples of every `skipped`/`warnings` shape (all six skip reasons, plus the warnings array) live in EXAMPLES.md's ["Reading the API response"](EXAMPLES.md#reading-the-api-response) — every reason is asserted by the backend test suite.
 
+#### Deprecated: key authentication
+
+Partners that integrated before token authentication authenticate with two keys on a separate URL. This still works, and the payload, the behavior and the response are the same as described above. New integrations use tokens, and existing ones move over with [MIGRATION.md](MIGRATION.md).
+
+- Header: `Authorization: Bearer <user_key>:<partner_key>`
+- `user_key`: server-generated when a user enables the external source.
+- `partner_key`: issued per integration.
+
+```
+POST /external/v1/import
+Content-Type: application/json
+Authorization: Bearer <user_key>:<partner_key>
+```
+
+```sh
+curl -X POST https://jetlog.app/external/v1/import \
+  -H "Authorization: Bearer $USER_KEY:$PARTNER_KEY" \
+  -H "Content-Type: application/json" \
+  -d @payload.json
+```
+
+Responses from this route carry `Deprecation: true` and a `Link` header with `rel="deprecation"` that points to [MIGRATION.md](MIGRATION.md). No cut-off date is set. When one is, it will be announced, responses will also carry a `Sunset` header, and after that moment the route answers `410` with `{"error":"legacy_auth_removed"}`. Entries created with the keys stay owned by the same partner when it switches to tokens.
+
 ## Tips
 - Keep `ref_id` unique in `people`; reuse in `entries[*].people`.
 - Use UTC for times; `date` is `YYYY-MM-DD`.
-- Batch large external imports; split deeplinks if URLs get too long.
+- Batch large external imports (at most 200 entries and 1000 people per request on the token route); split deeplinks if URLs get too long.
