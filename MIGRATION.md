@@ -1,6 +1,6 @@
 # Moving to token authentication
 
-This guide is for partners that send flights to Jetlog with the key pair, `Authorization: Bearer <user_key>:<partner_key>` on `/external/v1/import`. It is also the complete description of the token flow for a partner that starts from scratch.
+This guide is for partners that send flights to Jetlog with the key pair, `Authorization: Bearer <user_key>:<partner_key>` on `/external/v1/import`. It is also the complete description of the token flow for an app that starts from scratch. A new app registers in the developer console (step 2), and a partner that already uses the key pair does not: it asks Jetlog to link its metadata document to its existing registration. This guide uses the own flights level, which gives the access the key pair gives. The wider level, with reading and proposals, is described in [PARTNER_API.md](PARTNER_API.md).
 
 Words used in this guide:
 
@@ -13,12 +13,13 @@ Sections:
 
 1. [What changes and what stays the same](#what-changes-and-what-stays-the-same)
 2. [Key route and token route compared](#key-route-and-token-route-compared)
-3. [The steps](#the-steps)
-4. [A phone app](#a-phone-app)
-5. [A server](#a-server)
-6. [Errors on the token route](#errors-on-the-token-route)
-7. [Running both routes side by side](#running-both-routes-side-by-side)
-8. [Checklist](#checklist)
+3. [Access levels](#access-levels)
+4. [The steps](#the-steps)
+5. [A phone app](#a-phone-app)
+6. [A server](#a-server)
+7. [Errors on the token route](#errors-on-the-token-route)
+8. [Running both routes side by side](#running-both-routes-side-by-side)
+9. [Checklist](#checklist)
 
 ## What changes and what stays the same
 
@@ -27,7 +28,7 @@ Sections:
 - The payload. `entries` and `people` follow the schema in the [README](README.md), with the same field rules, the same `null` handling and the same allowlists.
 - Matching. An entry is matched per pilot on `date + flight_number + from + to`, exactly as on the key route.
 - The response. A successful call returns `{"data": "OK", "skipped": [...]}`, plus `warnings` when there is something to report. The skip reasons are unchanged.
-- A partner only ever changes entries it created. Entries written by the pilot, by a roster import or by another partner are never modified and come back as `duplicate`.
+- On the import route a partner only ever changes entries it created. Entries written by the pilot, by a roster import or by another partner are never modified and come back as `duplicate`.
 - Entries you created with the key pair stay yours after you switch. Both routes attribute flights to the same partner registration, so a token can amend or delete a flight you sent earlier with a key.
 
 **Changes**
@@ -36,9 +37,9 @@ Sections:
 - The URL. `/api/partner/v1/import` instead of `/external/v1/import`.
 - How a pilot connects. The pilot approves your app in the Jetlog app, instead of copying a key out of it.
 - Lifetime. Access tokens last one hour and refresh tokens 90 days. The keys do not expire.
-- At most 200 entries and 1000 people per request on the token route.
+- At most 200 entries, 1000 people and 2 MB of body per request on the token route.
 - The pilot does not need the external source selected in Jetlog. The connection is listed under Settings > Connected Apps and works next to a calendar or roster source the pilot has set up.
-- What a token may do is limited to adding flights with their crew, and changing or deleting the flights your partner registration created. It cannot read the logbook or touch anything else.
+- With `scope=import`, what a token may do is what the key pair may do: add flights with their crew, and change or delete the flights your partner registration created. It cannot read the logbook or touch anything else. A wider level exists and is optional, see [Access levels](#access-levels).
 - Calls on the token route do not create an import batch in the pilot's list of imports. They are recorded in the audit log.
 
 ## Key route and token route compared
@@ -50,17 +51,29 @@ Sections:
 | How a pilot connects | The pilot enables the external source in Jetlog and hands the user key to the partner | The partner starts an authorization request and the pilot approves it in the Jetlog app |
 | What the partner stores | One partner key for all pilots, one user key per pilot | No shared secret. One refresh token per pilot |
 | Lifetime | Neither key expires | Access token 1 hour. Refresh token 90 days, replaced on every use |
-| What it may do | Add flights, change and delete the flights the partner created | The same, and nothing else |
-| Requests | No cap documented | At most 200 entries and 1000 people |
+| What it may do | Add flights, change and delete the flights the partner created | The same with `scope=import`. A wider level is optional, see [Access levels](#access-levels) |
+| Requests | No cap documented | At most 200 entries, 1000 people and 2 MB |
 | Pilot's source setting in Jetlog | Must be the external source | No requirement |
 | How to disconnect | The pilot changes the source in the Source screen of the Jetlog app | The partner calls the revoke endpoint, or the pilot removes the app under Settings > Connected Apps |
+
+## Access levels
+
+A pilot approves a partner at one of two levels. A request with `scope=import` gives the own flights level, which is exactly the access the key pair gives: add flights, and change or remove the flights the partner added. Nothing in this guide changes for a partner that asks for `scope=import`, and it is all a partner moving from the key pair needs.
+
+The wider level is optional. It is called whole logbook, and a partner asks for it with `scope=import read write`. It adds reading the logbook and proposing changes that the pilot approves in the Jetlog app. Three things to know before asking for it:
+
+- Jetlog enables it for each app separately. A new app asks for it on its own page in the developer console once it is approved, see [step 2](#2-register-your-app). A partner that is not enabled gets the own flights level, whatever it asks for, and no error.
+- The pilot chooses the level when approving, so a partner can receive less than it asked for. The `scope` in the token response says what was granted.
+- A partner that gets `scope=import` back works exactly as described in this guide.
+
+The routes, the proposals and their errors are in [PARTNER_API.md](PARTNER_API.md).
 
 ## The steps
 
 In order:
 
 1. Host a metadata document on your own domain.
-2. Send its URL to Jetlog to be registered.
+2. Register your app in the developer console, or, for a partner that already uses the key pair, have Jetlog link the document to your existing registration.
 3. Send the pilot to Jetlog with an authorization request (authorization code with PKCE).
 4. Receive the callback.
 5. Exchange the code for tokens.
@@ -79,7 +92,7 @@ The endpoints:
 
 These endpoints are also listed in the standard discovery document at `https://jetlog.app/.well-known/oauth-authorization-server`.
 
-Two fixed values appear in every request below. The **scope** is `import`. The **resource** is `https://jetlog.app/api/partner/v1`, which names the token route as the place the token is meant for. A token that was issued for another resource is refused on the token route.
+Two fixed values appear in every request below. The **scope** is `import`, which gives the access of the key pair. The **resource** is `https://jetlog.app/api/partner/v1`, which names the token route as the place the token is meant for. A token that was issued for another resource is refused on the token route.
 
 Jetlog has no client secrets. Your identity is the URL of your metadata document, and PKCE protects the authorization code.
 
@@ -91,6 +104,7 @@ The metadata document is a JSON file served from your own domain. Its URL is you
 {
   "client_id": "https://partner.example.com/jetlog-client.json",
   "client_name": "Example Partner",
+  "jetlog_developer": "jld_m4zq7vtn2xkc5hbdr3wypfa6e7",
   "client_uri": "https://partner.example.com",
   "logo_uri": "https://partner.example.com/assets/logo-256.png",
   "redirect_uris": [
@@ -107,19 +121,40 @@ The rules:
 - The response is a JSON object of at most 64 KB and arrives within a few seconds (the whole fetch is cut off after 5 seconds).
 - The host resolves to public addresses. A host that resolves to a private, loopback or link-local address is refused.
 - `client_id` is required and equals the URL the document is served from, character for character.
-- `client_name` is required. It is at most 64 characters of printable ASCII, with no control characters. Pilots see the name Jetlog registered for you in step 2, so use the same name here.
-- `redirect_uris` is required and lists at least one URI of at most 255 characters. Every URI is `https://`. Plain `http://` is accepted only for `127.0.0.1`, `localhost` and `[::1]`, which is meant for development on your own computer. Custom schemes such as `partner://callback` are not accepted. See [A phone app](#a-phone-app) for why.
+- `client_name` is required. It is at most 64 characters of printable ASCII, with no control characters. Pilots see the name you register in step 2, which can differ from this one, so use the same name here.
+- `jetlog_developer` is the verification value that the developer console shows you, a top-level string that starts with `jld_`. An app registered in the console must carry it. It is the same for every app of one developer. It is not a secret and not a key. It only shows that the document is yours, so it is fine that it sits in a public file. A partner that already uses the key pair and has its document linked by Jetlog does not need it.
+- `redirect_uris` is required and lists at least one URI of at most 255 characters. Every URI is `https://`. Plain `http://` is accepted only for `127.0.0.1`, `localhost` and `[::1]`, which is meant for development on your own computer. Custom schemes such as `partner://callback` are not accepted. See [A phone app](#a-phone-app) for why. Each URI is a plain address with an ordinary ASCII host name: no backslash, no `user@` part or `%` in the host, no spaces, and no `#` fragment.
 - `client_uri`, `logo_uri` and `software_id` are optional, at most 255 characters each. Other fields are ignored.
 
-Jetlog keeps a copy of the document for 24 hours. After that it fetches the document again the next time an authorization request arrives. When that fetch fails, Jetlog keeps using the copy it has. Publish a change, such as a new redirect URI, at least a day before you rely on it, and keep the document available.
+Jetlog keeps a copy of the document for 24 hours. After that it fetches the document again the next time an authorization request arrives. When that fetch fails, Jetlog keeps using the copy it has. Publish a change at least a day before you rely on it, and keep the document available. A new or changed redirect URI also needs Jetlog's approval before it works, see [step 2](#2-register-your-app).
 
 Put one redirect URI in the document for each place a pilot can come back to: one for the phone app, one for the server, or both.
 
-### 2. Register the URL
+### 2. Register your app
 
-Email the URL of your metadata document to support@jetlog.app, together with the name pilots should see for your partner. Jetlog links the URL to your existing partner registration, which is why flights you created with the keys stay yours. Jetlog tells you when it is done.
+**A new app registers in the developer console.** The page for developers is `https://jetlog.app/developers` and the console is `https://jetlog.app/developers/console`.
 
-Until then an authorization request for your URL comes back to your callback with `error=unauthorized_client`, and no token is issued. If Jetlog ever disables a partner registration, the token route answers `403` with `integration_disabled` and a refresh answers `unauthorized_client`. Keep the tokens you hold. They work again when the registration is enabled.
+1. Sign in to the console with the email address of your Jetlog account. Jetlog mails you a code. You need a Jetlog account for this, and the console does not create one.
+2. The console shows your verification value, which starts with `jld_`. Put it in your metadata document as the top-level field `jetlog_developer`, as in the example in [step 1](#1-host-the-metadata-document). The value is the same for every app you register. It is not a secret and not a key.
+3. Fill in the registration form with the name pilots will see for your app and the address of your metadata document, which is your `client_id`. The name is 2 to 64 printable ASCII characters. It cannot contain "Jetlog", also not with spaces or look-alike letters, it cannot contain `/`, `:`, `@`, `<` or `>`, it cannot start with `www.`, and it has to be a name no other approved app uses.
+4. Press "Check document". Jetlog fetches the document, checks it by the rules of step 1 and checks your verification value, and lists every problem in plain words. Submitting runs the same check again.
+5. Submit the registration. From then on the name and the address cannot be changed. To change them, register a new app, or write to support@jetlog.app.
+
+Jetlog reviews every app. It fetches your document again before approving, so the document must still carry your verification value then. You get an email with the decision. Until your app is approved, an authorization request for it comes back to your callback with `error=unauthorized_client`, and no token is issued. If your app is not approved, its page in the console shows a note with the reason.
+
+The redirect URIs in the document at the moment of approval are the approved ones. A redirect URI that you add or change later does not work until Jetlog has approved it. Write to support@jetlog.app for that. An authorization request with a redirect URI that is not approved gets the Jetlog error page, like any other redirect URI that is not in the document.
+
+When your app needs the whole logbook level, ask for it on the app's page in the console once the app is approved. Give a short reason, 10 to 500 characters, that says which data you read and why. Jetlog decides per app and emails the decision. The page shows the result. Without it, your app gets the own flights level.
+
+The app's page in the console shows the status of the review, the approved redirect URIs, which access is enabled, how many pilots have connected the app (a count, never who), the requests of the last 30 days per day split into import, read and changes, the errors your app got, and how often the rate limit stopped it. The statistics start once pilots use the app.
+
+Limits: you can have at most 5 apps, rejected ones not counted, and submit at most 5 registrations in 24 hours, withdrawn and rejected ones included. A registration that is still in review can be withdrawn on its page.
+
+A pilot who approves your app in the Jetlog app sees the name you registered with the text "Registered with Jetlog under this name", and the host of your metadata document as a plain detail.
+
+**A partner that already uses the key pair does not register in the console.** Write to support@jetlog.app with the address of your metadata document, and Jetlog links that address to your existing partner registration. This is why flights you created with the keys stay yours. Jetlog tells you when it is done. For a linked document the `jetlog_developer` field is not needed.
+
+If Jetlog ever disables a partner registration, the token route answers `403` with `integration_disabled` and a refresh answers `unauthorized_client`. Keep the tokens you hold. They work again when the registration is enabled.
 
 ### 3. Build the authorization request
 
@@ -143,7 +178,7 @@ open "$AUTH_URL"    # macOS. On Linux use xdg-open.
 | `response_type` | `code` |
 | `client_id` | The URL of your metadata document |
 | `redirect_uri` | One of the `redirect_uris` in the document, copied exactly |
-| `scope` | `import`. Jetlog grants exactly `import`, whatever else is asked |
+| `scope` | `import` for the access of the key pair. `import read write` lets the pilot choose a wider level, see [Access levels](#access-levels) |
 | `state` | A random value you check again on the callback |
 | `code_challenge` | The S256 challenge of your verifier |
 | `code_challenge_method` | `S256`. The `plain` method does not exist |
@@ -189,7 +224,7 @@ curl -sS -X POST https://jetlog.app/oauth/token \
   --data-urlencode "resource=https://jetlog.app/api/partner/v1"
 ```
 
-The `redirect_uri` is the same string you used in the authorization request. The endpoint also accepts a JSON body with the same fields. The response:
+The `redirect_uri` is the same string you used in the authorization request. The endpoint also accepts a JSON body with the same fields. The `scope` in the response says what was granted. After a request with `scope=import` it is always `import`. The response:
 
 ```json
 {
@@ -222,7 +257,7 @@ curl -sS -X POST https://jetlog.app/api/partner/v1/import \
 
 The body and the response are the ones described in the [README](README.md) and in [EXAMPLES.md](EXAMPLES.md). Read `skipped` and `warnings` on every response, because a `200` does not mean every row landed.
 
-Send at most 200 entries and 1000 people per request. Include in each request the `people` its entries refer to, because a `ref_id` only has meaning inside one request.
+Send at most 200 entries and 1000 people per request, in a body of at most 2 MB. Include in each request the `people` its entries refer to, because a `ref_id` only has meaning inside one request.
 
 **Refreshing.** The access token lasts one hour. Refresh a minute or so before it expires, or when a call answers `401`:
 
@@ -327,7 +362,7 @@ The redirect URI of a phone app is an https link that your app has claimed (a un
 ### What the pilot sees on the same phone
 
 1. Your app opens the Jetlog page in the system browser sheet. The page is titled "Sign in with the Jetlog app". It shows your name, a two digit number, a QR code, and an "Open in Jetlog" button.
-2. The pilot remembers the number and taps "Open in Jetlog". The Jetlog app opens an approval screen. It names your app, says what your app may do, which is add flights and their crew and change or remove the flights it added, and says what it may not do, which is read the logbook or change anything else. It also shows three numbers.
+2. The pilot remembers the number and taps "Open in Jetlog". The Jetlog app opens an approval screen. For a request with `scope=import` it names your app, says what your app may do, which is add flights and their crew and change or remove the flights it added, and says what it may not do, which is read the logbook or change anything else. For a request that asks for the whole logbook level it offers the pilot a choice between that level and your own flights only. It also shows three numbers.
 3. The pilot taps the number that matches the one on the page and confirms with Face ID or the passcode. A wrong number blocks the request.
 4. The pilot switches back to your app, where the browser sheet is still open. The page now says the request was approved in the Jetlog app and names the account. The pilot taps "Continue".
 5. Jetlog redirects to your https callback. The system closes the sheet and passes the URL to your app, which exchanges the code.
@@ -364,6 +399,7 @@ A pilot who uses your phone app and your server needs one holder of the refresh 
 | `403` | `{"error":"insufficient_scope"}` | The token does not carry the `import` scope | The pilot connects again with `scope=import` |
 | `413` | `{"error":"too_many_entries","max":200}` | More than 200 entries in one request | Split the payload into requests of at most 200 entries. Nothing was written |
 | `413` | `{"error":"too_many_people","max":1000}` | More than 1000 people in one request | Send only the people the entries in that request refer to. Nothing was written |
+| `413` | `{"error":"payload_too_large","max_bytes":2097152}` | The body is larger than 2 MB. It is checked from the `Content-Length` header before anything else, so it can come before the token check | Split the payload into smaller requests. Nothing was written |
 | `429` | A `Retry-After` header, in seconds, and `{"error":"rate_limited","retry_after":n}` | Too many requests for this pilot | Wait for `Retry-After`, then send the same request. Send one pilot's imports one after another |
 | `400` | `{"error":"<code>"}`, for example `invalid_payload` | The payload could not be imported as a whole | Fix the payload. Nothing was written |
 | `400` for a body that is not valid JSON, and any `5xx` | `{"errors":{"detail":"<status text>"}}` | The request could not be read, or something failed on the Jetlog side | Fix the request body. After a `5xx`, resend the same payload. It is safe, because matching applies the same rows again |
@@ -377,7 +413,7 @@ On the authorization and token endpoints:
 | Where | What you get | Meaning |
 | :-- | :-- | :-- |
 | Authorization, browser shows a Jetlog error page | No redirect to your callback | Jetlog could not trust the request: the metadata document is unreachable or invalid, `redirect_uri` is not in the document, or a required parameter is missing |
-| Authorization, redirect with `error=unauthorized_client` | Your metadata document URL is not registered with Jetlog, or the registration is disabled | Register the URL (step 2), or email support@jetlog.app |
+| Authorization, redirect with `error=unauthorized_client` | Your app is not approved yet, was not approved, or its registration is disabled. A key pair partner whose document is not linked yet gets this too | Check the status on the app's page in the developer console (step 2). A key pair partner writes to support@jetlog.app |
 | Authorization, redirect with `error=access_denied` | The pilot declined or cancelled | Show that nothing was connected |
 | Authorization, redirect with `error=invalid_request`, `unsupported_response_type` or `invalid_target` | A parameter is wrong | `code_challenge_method` has to be `S256`, `response_type` has to be `code`, `resource` has to be `https://jetlog.app/api/partner/v1` |
 | Token, `400` `{"error":"invalid_grant"}` on a code | The code expired (60 seconds), was already used, or something does not match: `client_id`, `redirect_uri`, `code_verifier` or `resource` | Start the authorization again |
@@ -415,15 +451,16 @@ You can repeat the same payload on the token route that you sent on the key rout
 
 - [ ] The metadata document is served over https, answers `200` without redirects, and its `client_id` equals its own URL.
 - [ ] `client_name` is printable ASCII of at most 64 characters, and every redirect URI is https.
-- [ ] The URL is sent to support@jetlog.app and confirmed as registered.
-- [ ] Every authorization request has a fresh `state` and a fresh S256 code challenge, and carries `scope=import` and `resource=https://jetlog.app/api/partner/v1`.
+- [ ] The app is registered in the developer console and approved, and the document carries the `jetlog_developer` value. A key pair partner has its document linked by Jetlog.
+- [ ] A new or changed redirect URI is approved by Jetlog before it is used.
+- [ ] Every authorization request has a fresh `state` and a fresh S256 code challenge, and carries the `scope` your app needs (`import` for the access of the key pair) and `resource=https://jetlog.app/api/partner/v1`.
 - [ ] The callback checks `state` and `iss`, and handles `error=access_denied`.
 - [ ] The code is exchanged within 60 seconds, with the same `redirect_uri` and the stored verifier.
 - [ ] Phone app: system browser, https callback that the app has claimed, no custom scheme.
 - [ ] Tokens live in the Keychain, the Android Keystore or encrypted server storage, and not in logs.
 - [ ] One refresh at a time per pilot, and the new refresh token is saved before the response is used.
 - [ ] A `401` triggers one refresh and one retry. A failed refresh moves the pilot to "not connected".
-- [ ] Requests have at most 200 entries and 1000 people, include the `people` they refer to, and wait out `Retry-After` on a `429`.
+- [ ] Requests have at most 200 entries, 1000 people and 2 MB of body, include the `people` they refer to, and wait out `Retry-After` on a `429`.
 - [ ] `skipped` and `warnings` are read on every response.
 - [ ] Disconnecting calls the revoke endpoint and deletes the stored tokens.
 - [ ] Pilots still on a key keep using it until they move, and are moved the next time they open the app.
