@@ -7,11 +7,15 @@ decode, an example that violates a rule the docs themselves state, a curl
 `-d` body that has drifted from the JSON block it illustrates, an orphan
 "Open this example in Jetlog" link with nothing to pair it to, or a clickable
 link whose encoded payload has drifted from the JSON block sitting right next
-to it. It also checks the authentication the docs show: every curl to an import
-route uses the token route with an access token, the key route appears only
-under a "Deprecated" heading, and the OAuth examples in MIGRATION.md agree with
-each other (one metadata document, and the same client_id, redirect_uri,
-scope and resource in every request). Markdown links to a heading must resolve.
+to it. It also checks the authentication the docs show: every curl to a partner
+route uses an access token, the key route appears only under a "Deprecated"
+heading, and the OAuth examples in MIGRATION.md agree with each other (one
+metadata document, and the same client_id, redirect_uri, scope and resource in
+every request). PARTNER_API.md gets the same treatment for its own examples:
+every curl names a real partner route with the right method, query parameters
+and body, every proposal request follows the operations format, every response
+has the documented shape, and the examples agree with each other. Markdown
+links to a heading must resolve.
 
 This is a docs-only check — it needs nothing but Python. It cannot tell you what
 the server DOES with a payload; the two code repos own that:
@@ -25,6 +29,7 @@ change an example here, change it there too.
 Usage: python3 scripts/validate_examples.py
 """
 
+import datetime
 import json
 import pathlib
 import re
@@ -34,7 +39,9 @@ import urllib.parse
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCS = ["README.md", "EXAMPLES.md"]
 MIGRATION = "MIGRATION.md"
+PARTNER = "PARTNER_API.md"
 TOKEN_ROUTE = "https://jetlog.app/api/partner/v1/import"
+PARTNER_BASE = "https://jetlog.app/api/partner/v1"
 KEY_ROUTE = "https://jetlog.app/external/v1/import"
 OAUTH_BASE = "https://jetlog.app/oauth/"
 RESOURCE = "https://jetlog.app/api/partner/v1"
@@ -49,6 +56,8 @@ checked = {
     "auth_blocks": 0,
     "migration_curl": 0,
     "anchors": 0,
+    "partner_curl": 0,
+    "partner_json": 0,
 }
 
 
@@ -249,6 +258,27 @@ for name in DOCS:
         else:
             checked["links_matched"] += 1
 
+# The routes of the partner API with the scope each one needs. Mirrors the routes
+# table in PARTNER_API.md, which the check below compares against.
+PARTNER_ROUTES = {
+    ("POST", "/import"): "import",
+    ("GET", "/me"): "read",
+    ("GET", "/entries"): "read",
+    ("GET", "/entries/:id"): "read",
+    ("GET", "/people"): "read",
+    ("GET", "/aircraft"): "read",
+    ("GET", "/totals"): "read",
+    ("POST", "/changes"): "write",
+    ("GET", "/changes/:id"): "write",
+}
+LEVELS = {"import", "import read write"}
+
+
+def partner_template(url: str) -> str:
+    """Turns .../entries/<id> and .../changes/<id> into the route template."""
+    return re.sub(r"^(https://jetlog\.app/api/partner/v1/(?:entries|changes))/[^/]+$", r"\1/:id", url)
+
+
 def heading_slug(heading: str) -> str:
     """GitHub's anchor for a heading: lowercase, punctuation dropped, spaces to hyphens."""
     heading = heading.replace("`", "").strip().lower()
@@ -266,10 +296,14 @@ def headings_of(text: str) -> list[tuple[int, str]]:
 
 def check_auth_blocks(name: str, text: str, headings: list[tuple[int, str]]) -> None:
     """URLs and the Authorization header of every sh block that talks to Jetlog."""
-    allowed = {TOKEN_ROUTE, KEY_ROUTE} | {OAUTH_BASE + p for p in ("authorize", "token", "revoke")}
+    allowed = {KEY_ROUTE} | {OAUTH_BASE + p for p in ("authorize", "token", "revoke")}
+    allowed |= {PARTNER_BASE + path for _, path in PARTNER_ROUTES}
     for m in re.finditer(r"```sh\n(.*?)\n```", text, re.S):
         block = m.group(1)
-        urls = [u.split("?")[0] for u in re.findall(r"(?<!resource=)https://jetlog\.app/(?:external|api|oauth)/[^\s\"'\\]+", block)]
+        urls = [
+            partner_template(u.split("?")[0])
+            for u in re.findall(r"(?<!resource=)https://jetlog\.app/(?:external|api|oauth)/[^\s\"'\\]+", block)
+        ]
         if not urls:
             continue
         checked["auth_blocks"] += 1
@@ -277,8 +311,8 @@ def check_auth_blocks(name: str, text: str, headings: list[tuple[int, str]]) -> 
         for url in urls:
             if url not in allowed:
                 fail(where, f"unexpected Jetlog URL {url}")
-        if TOKEN_ROUTE in urls and 'Authorization: Bearer $ACCESS_TOKEN"' not in block:
-            fail(where, "a token route call must send `Authorization: Bearer $ACCESS_TOKEN`")
+        if any(u.startswith(PARTNER_BASE) for u in urls) and 'Authorization: Bearer $ACCESS_TOKEN"' not in block:
+            fail(where, "a partner route call must send `Authorization: Bearer $ACCESS_TOKEN`")
         if KEY_ROUTE in urls:
             under = [h for off, h in headings if off < m.start()]
             if name == "EXAMPLES.md" or not under or "deprecated" not in under[-1].lower():
@@ -290,10 +324,10 @@ def check_auth_blocks(name: str, text: str, headings: list[tuple[int, str]]) -> 
 def check_anchors() -> None:
     """Every `](#anchor)` and `](FILE.md#anchor)` link must hit a real heading."""
     slugs = {}
-    for doc in DOCS + [MIGRATION]:
+    for doc in DOCS + [MIGRATION, PARTNER]:
         slugs[doc] = {heading_slug(h) for _, h in headings_of((ROOT / doc).read_text())}
-    for doc in DOCS + [MIGRATION]:
-        for m in re.finditer(r"\]\(([A-Za-z]+\.md)?#([^)\s]+)\)", (ROOT / doc).read_text()):
+    for doc in DOCS + [MIGRATION, PARTNER]:
+        for m in re.finditer(r"\]\(([A-Za-z_]+\.md)?#([^)\s]+)\)", (ROOT / doc).read_text()):
             target = m.group(1) or doc
             checked["anchors"] += 1
             if m.group(2) not in slugs.get(target, set()):
@@ -320,7 +354,7 @@ def check_migration() -> None:
 
     if document is None:
         fail(MIGRATION, "no metadata document example found")
-        return
+        return None
     client_id = document.get("client_id", "")
     name = document.get("client_name", "")
     uris = document.get("redirect_uris", [])
@@ -348,12 +382,452 @@ def check_migration() -> None:
                     continue
                 checked["migration_curl"] += 1
                 check_entries_payload(f"{MIGRATION} curl body", payload, deeplink=False)
+    return document
 
 
-for name in DOCS + [MIGRATION]:
+# ---------------------------------------------------------------------------
+# PARTNER_API.md
+# ---------------------------------------------------------------------------
+
+UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+CLOCK = re.compile(r"([01]\d|2[0-3]):[0-5]\d")
+CLOCK_SECONDS = re.compile(r"([01]\d|2[0-3]):[0-5]\d:[0-5]\d")
+STATUSES = {"pending", "applied", "rejected", "expired", "stale", "failed", "revoked"}
+PROPOSAL_FIELDS = {
+    "id", "status", "client_kind", "client_name", "summary", "operations", "preview", "counts",
+    "error", "expires_at", "decided_at", "applied_batch_id", "reverted_indices", "created_at",
+}
+PREVIEW_FIELDS = {"index", "op", "resource", "id", "before", "after", "changed_fields"}
+OPERATION_FIELDS = {"op", "resource", "id", "data", "add_self"}
+# What `data` may carry for the two resources a partner proposes changes on.
+ENTRY_DATA_KEYS = {
+    "type", "date", "flight_number", "registration", "from", "to", "actual_from", "actual_to",
+    "scheduled_off_blocks", "off_blocks", "airborne", "touchdown", "on_blocks",
+    "update_flight_data", "remarks", "people", "takeoffs_and_landings", "approaches",
+    "go_arounds", "passengers_on_board", "cargo_on_board", "fuel_planned", "fuel_used",
+    "is_deleted",
+}
+ENTRY_TIME_KEYS = {"scheduled_off_blocks", "off_blocks", "airborne", "touchdown", "on_blocks"}
+PERSON_DATA_KEYS = {"first_name", "last_name", "default_role", "employee_number"}
+ENTRIES_QUERY = {
+    "from", "to", "type", "registration", "airport", "flight_number", "person_id", "role",
+    "include_deleted", "limit", "after_date", "after_id",
+}
+TOTALS_QUERY = {"from", "to"}
+CALCULATED_FIELDS = {
+    "pilot_in_command_role", "spic_role", "picus_role", "line_check_airman_role",
+    "line_check_airman_initial_role", "senior_instructor_pic_role",
+    "senior_instructor_co_pilot_role", "senior_instructor_observer_role", "dead_head_role",
+    "route_instructor_role", "route_instructor_co_pilot_role", "co_pilot_role",
+    "cruise_relief_raw_block", "cruise_relief_co_pilot_credited", "dual_role",
+    "flight_instructor_role", "flight_examiner_role", "single_pilot_single_engine",
+    "single_pilot_multi_engine", "multi_pilot", "night", "ifr", "cross_country",
+    "total_time_of_flight", "total_air_time", "fstd_session", "fstd_instructor_time",
+    "fstd_examiner_time", "fstd_senior_instructor_time", "cross_country_distance", "computed_at",
+}
+# One row of GET /entries as a token without the files and signatures scopes sees it.
+ENTRY_ROW_KEYS = {
+    "id", "version", "type", "date", "entry_source", "flight_number", "registration", "from", "to",
+    "actual_from", "actual_to", "off_blocks", "airborne", "touchdown", "on_blocks",
+    "registration_system", "off_blocks_system", "airborne_system", "touchdown_system",
+    "on_blocks_system", "system_date", "system_from", "system_to", "update_flight_data", "derived",
+    "ifr", "is_completed", "is_bulk", "manual_times", "aircraft_icao_code",
+    "takeoffs_and_landings", "approaches", "go_arounds", "passengers_on_board", "fuel_planned",
+    "fuel_used", "cargo_on_board", "start_time", "end_time", "fstd_id", "session_type",
+    "fstd_takeoffs", "fstd_landings", "is_imported_from_other_logbook", "is_deleted", "remarks",
+    "people", "updated_at", "calculated_times", "signature", "signature_attachment_id",
+    "attachment_count",
+}
+DERIVED_KEYS = {"date", "registration", "from", "to", "off_blocks", "airborne", "touchdown", "on_blocks"}
+PERSON_ROW_KEYS = {
+    "id", "first_name", "last_name", "default_role", "employee_number",
+    "is_imported_from_other_logbook", "has_photo",
+}
+AIRCRAFT_ROW_KEYS = {
+    "id", "use_system", "aircraft_icao_code", "aircraft_iata_code", "system_aircraft_icao_code",
+    "system_aircraft_iata_code", "is_imported_from_other_logbook",
+}
+
+
+def timestamp(where: str, value: object) -> datetime.datetime | None:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        fail(where, f"{value!r} is not a UTC timestamp ending in Z")
+        return None
+    try:
+        return datetime.datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError:
+        fail(where, f"{value!r} is not an ISO 8601 timestamp")
+        return None
+
+
+def check_data(where: str, resource: str, op: str, data: dict, known_people: set[str]) -> None:
+    allowed = ENTRY_DATA_KEYS if resource == "entry" else PERSON_DATA_KEYS
+    for key in data:
+        if key not in allowed:
+            fail(where, f"`{key}` is not a field a partner can set on a {resource}")
+    for key, value in data.items():
+        if isinstance(value, str) and len(value) > 2000:
+            fail(where, f"`{key}` is longer than the 2000 characters a proposal allows")
+    if resource != "entry":
+        return
+    if op == "create":
+        if data.get("type") != "flight":
+            fail(where, "an entry create needs `type: flight`")
+        if not DATE.fullmatch(str(data.get("date", ""))):
+            fail(where, "an entry create needs a `date` in YYYY-MM-DD form")
+    if "date" in data and not DATE.fullmatch(str(data["date"])):
+        fail(where, "`date` must be YYYY-MM-DD")
+    for key in ENTRY_TIME_KEYS & set(data):
+        if not CLOCK.fullmatch(str(data[key])):
+            fail(where, f"`{key}` must be HH:MM")
+    for key in ("from", "to", "actual_from", "actual_to"):
+        if key in data and not re.fullmatch(r"[A-Z]{4}", str(data[key])):
+            fail(where, f"`{key}` must be an ICAO code")
+    tal = data.get("takeoffs_and_landings")
+    if tal is not None:
+        if tal.get("type") == "auto":
+            ok = set(tal) == {"type", "takeoffs", "landings"}
+        elif tal.get("type") == "manual":
+            ok = set(tal) == {"type", "takeoffs_day", "takeoffs_night", "landings_day", "landings_night"}
+        else:
+            ok = False
+        if not ok:
+            fail(where, "`takeoffs_and_landings` needs `type` auto or manual with exactly that shape's counts")
+    for item in data.get("approaches") or []:
+        if not set(item) <= {"type", "count", "autolands"} or not {"type", "count"} <= set(item):
+            fail(where, "an approach needs `type` and `count`")
+    for item in data.get("people") or []:
+        if not isinstance(item, dict) or not set(item) <= {"person_id", "role", "is_deleted"}:
+            fail(where, "a crew item has only `person_id`, `role` and `is_deleted`")
+            continue
+        person_id = item.get("person_id", "")
+        if person_id != "SELF" and person_id not in known_people:
+            fail(where, f"person_id {person_id!r} is neither SELF, a person of the examples, nor created in this proposal")
+        if not item.get("role"):
+            fail(where, "a crew item needs a `role`")
+
+
+def check_proposal(where: str, payload: object, known_entries: set[str], known_people: set[str]) -> None:
+    if not isinstance(payload, dict) or set(payload) != {"summary", "operations"}:
+        fail(where, "a proposal has exactly `summary` and `operations`")
+        return
+    summary, operations = payload["summary"], payload["operations"]
+    if not isinstance(summary, str) or not 0 < len(summary) <= 500:
+        fail(where, "`summary` must be 1 to 500 characters")
+    if not isinstance(operations, list) or not 1 <= len(operations) <= 200:
+        fail(where, "`operations` must hold 1 to 200 operations")
+        return
+    created_people = {
+        op.get("id") for op in operations
+        if isinstance(op, dict) and op.get("op") == "create" and op.get("resource") == "person"
+    }
+    seen = set()
+    for i, op in enumerate(operations):
+        at = f"{where} operations[{i}]"
+        if not isinstance(op, dict) or not set(op) <= OPERATION_FIELDS:
+            fail(at, f"an operation has only {sorted(OPERATION_FIELDS)}")
+            continue
+        kind, resource, record_id, data = op.get("op"), op.get("resource"), op.get("id"), op.get("data")
+        if kind not in ("create", "update", "delete"):
+            fail(at, "`op` must be create, update or delete")
+        if resource not in ("entry", "person"):
+            fail(at, "`resource` must be entry or person")
+            continue
+        if kind != "create" and not (isinstance(record_id, str) and UUID.fullmatch(record_id)):
+            fail(at, "an update or delete needs the `id` of the record")
+        if record_id is not None and not (isinstance(record_id, str) and UUID.fullmatch(record_id)):
+            fail(at, "`id` must be a UUID")
+        if kind in ("update", "delete") and resource == "entry" and record_id not in known_entries:
+            fail(at, f"entry {record_id} does not appear in the read examples")
+        if record_id is not None:
+            if (resource, record_id) in seen:
+                fail(at, "the same record appears twice in one proposal")
+            seen.add((resource, record_id))
+        if kind == "delete" and data is not None:
+            fail(at, "a delete has no `data`")
+        if kind in ("create", "update"):
+            if not isinstance(data, dict) or not data:
+                fail(at, "a create or update needs a non-empty `data` object")
+            else:
+                check_data(at, resource, kind, data, known_people | created_people)
+        if "add_self" in op and not (kind == "create" and resource == "entry" and isinstance(op["add_self"], bool)):
+            fail(at, "`add_self` is a boolean on an entry create only")
+
+
+def check_entry_row(where: str, row: dict, detail: bool) -> None:
+    expected = ENTRY_ROW_KEYS | ({"signature_sha256"} if detail else set())
+    if set(row) != expected:
+        fail(where, f"entry keys differ: missing {sorted(expected - set(row))}, extra {sorted(set(row) - expected)}")
+        return
+    if not UUID.fullmatch(row["id"]) or not DATE.fullmatch(row["date"]):
+        fail(where, "id or date is malformed")
+    if set(row["derived"]) != DERIVED_KEYS:
+        fail(where, "`derived` keys differ from the documented ones")
+        return
+    for key in ("off_blocks", "airborne", "touchdown", "on_blocks"):
+        for source in (key, f"{key}_system"):
+            if row[source] is not None and not CLOCK_SECONDS.fullmatch(row[source]):
+                fail(where, f"`{source}` must be HH:MM:SS")
+    # `derived` is the system value while tracking is on, the entered value otherwise.
+    tracking = row["update_flight_data"]
+    for key in ("off_blocks", "airborne", "touchdown", "on_blocks"):
+        if row["derived"][key] != row[f"{key}_system" if tracking else key]:
+            fail(where, f"`derived.{key}` does not follow `update_flight_data`")
+    if row["derived"]["registration"] != row["registration_system" if tracking else "registration"]:
+        fail(where, "`derived.registration` does not follow `update_flight_data`")
+    timestamp(f"{where} updated_at", row["updated_at"])
+    if row["signature"] not in ("none", "waived", "signed"):
+        fail(where, "`signature` must be none, waived or signed")
+    for person in row["people"]:
+        if set(person) != {"person_id", "role", "is_deleted"}:
+            fail(where, "a crew item of an entry has `person_id`, `role` and `is_deleted`")
+    calculated = row["calculated_times"]
+    if calculated is not None and set(calculated) != CALCULATED_FIELDS:
+        fail(where, "`calculated_times` keys differ from the documented ones")
+
+
+def check_pending_change(where: str, body: dict, requests: dict[str, dict]) -> None:
+    if set(body) != {"pending_change"}:
+        fail(where, "the body is exactly `{\"pending_change\": {...}}`")
+        return
+    pc = body["pending_change"]
+    if set(pc) != PROPOSAL_FIELDS:
+        fail(where, f"proposal keys differ: missing {sorted(PROPOSAL_FIELDS - set(pc))}, extra {sorted(set(pc) - PROPOSAL_FIELDS)}")
+        return
+    if pc["status"] not in STATUSES:
+        fail(where, f"status {pc['status']!r} is not a documented status")
+    if pc["client_kind"] != "partner":
+        fail(where, "`client_kind` of a partner proposal is `partner`")
+    if [op["index"] for op in pc["operations"]] != list(range(len(pc["operations"]))):
+        fail(where, "operation indexes must count from 0")
+    if len(pc["preview"]) != len(pc["operations"]):
+        fail(where, "there must be one preview item per operation")
+    for op, item in zip(pc["operations"], pc["preview"]):
+        if set(item) != PREVIEW_FIELDS:
+            fail(where, "a preview item has index, op, resource, id, before, after and changed_fields")
+        elif (item["index"], item["resource"], item["id"]) != (op["index"], op["resource"], op["id"]):
+            fail(where, "a preview item must describe the operation with the same index")
+        elif item["op"] == "delete" and (item["after"] or {}).get("is_deleted") is not True:
+            fail(where, "the `after` of a delete shows `is_deleted: true`")
+    if set(pc["counts"]) != {"creates", "updates", "deletes"}:
+        fail(where, "`counts` has creates, updates and deletes")
+    created, expires = timestamp(f"{where} created_at", pc["created_at"]), timestamp(f"{where} expires_at", pc["expires_at"])
+    if created and expires and expires - created != datetime.timedelta(hours=24):
+        fail(where, "`expires_at` must be 24 hours after `created_at`")
+    if pc["status"] == "pending" and pc["decided_at"] is not None:
+        fail(where, "a pending proposal has no `decided_at`")
+    if pc["status"] == "applied" and (pc["decided_at"] is None or pc["applied_batch_id"] is None):
+        fail(where, "an applied proposal has `decided_at` and `applied_batch_id`")
+    if pc["decided_at"] is not None:
+        timestamp(f"{where} decided_at", pc["decided_at"])
+    # The same proposal, as sent and as stored.
+    sent = requests.get(pc["summary"])
+    if sent is None:
+        fail(where, "no curl request in the document has this summary")
+        return
+    if len(sent["operations"]) != len(pc["operations"]):
+        fail(where, "the stored operations differ in number from the request")
+        return
+    for sent_op, stored in zip(sent["operations"], pc["operations"]):
+        for key in ("op", "resource", "data"):
+            if sent_op.get(key) != stored.get(key) and not (key == "data" and sent_op.get("op") == "delete"):
+                fail(where, f"operation {stored['index']} `{key}` differs from the request")
+        if sent_op.get("id") is not None and sent_op["id"] != stored["id"]:
+            fail(where, f"operation {stored['index']} `id` differs from the request")
+
+
+def check_partner_api(document: dict | None) -> None:
+    """PARTNER_API.md: every curl is a real route, every body and response has the documented shape."""
+    text = (ROOT / PARTNER).read_text()
+    where = PARTNER
+
+    # --- The JSON blocks, parsed once. ---
+    blocks = []
+    for m in re.finditer(r"```json\n(.*?)\n```", text, re.S):
+        try:
+            blocks.append((m.start(), json.loads(m.group(1))))
+        except json.JSONDecodeError as e:
+            fail(f"{where} json block at offset {m.start()}", f"invalid JSON: {e}")
+        checked["partner_json"] += 1
+
+    known_entries, known_people = set(), set()
+    for _, body in blocks:
+        if not isinstance(body, dict):
+            continue
+        for row in body.get("entries", []) + ([body["entry"]] if "entry" in body else []):
+            known_entries.add(row["id"])
+        known_people |= {p["id"] for p in body.get("people", [])}
+        if "self_person_id" in body:
+            known_people.add(body["self_person_id"])
+
+    # --- The curl requests. ---
+    covered, requests = set(), {}
+    for sh in re.finditer(r"```sh\n(.*?)\n```", text, re.S):
+        for cmd in re.split(r"(?m)^(?=curl\b)", sh.group(1)):
+            if not cmd.startswith("curl"):
+                continue
+            at = f"{where} curl at offset {sh.start()}"
+            url_m = re.search(r"https://jetlog\.app/api/partner/v1[^\s\"']*", cmd)
+            if not url_m:
+                fail(at, "a curl that does not call a partner route")
+                continue
+            checked["partner_curl"] += 1
+            parsed = urllib.parse.urlsplit(url_m.group(0))
+            path = parsed.path[len("/api/partner/v1"):]
+            template = re.sub(r"^/(entries|changes)/([^/]+)$", r"/\1/:id", path)
+            method_m = re.search(r"-X (\w+)", cmd)
+            method = method_m.group(1) if method_m else ("POST" if re.search(r"\s-d\s", cmd) else "GET")
+            route = (method, template)
+            if route not in PARTNER_ROUTES:
+                fail(at, f"{method} {path} is not a partner route")
+                continue
+            covered.add(route)
+            if '-H "Authorization: Bearer $ACCESS_TOKEN"' not in cmd:
+                fail(at, "a partner route call must send `Authorization: Bearer $ACCESS_TOKEN`")
+            if method == "POST" and '-H "Content-Type: application/json"' not in cmd:
+                fail(at, "a POST must send `Content-Type: application/json`")
+            if template.endswith("/:id") and not UUID.fullmatch(path.rsplit("/", 1)[1]):
+                fail(at, "the id in the path must be a UUID")
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            if route == ("GET", "/entries"):
+                if not set(query) <= ENTRIES_QUERY:
+                    fail(at, f"unknown query parameters {sorted(set(query) - ENTRIES_QUERY)}")
+                for key in ("from", "to", "after_date"):
+                    if key in query and not DATE.fullmatch(query[key][0]):
+                        fail(at, f"`{key}` must be YYYY-MM-DD")
+                if ("after_date" in query) != ("after_id" in query):
+                    fail(at, "`after_date` and `after_id` go together")
+                if "role" in query and "person_id" not in query:
+                    fail(at, "`role` only works together with `person_id`")
+                if "type" in query and query["type"][0] not in ("flight", "fstd"):
+                    fail(at, "`type` is flight or fstd")
+                if "limit" in query and not (query["limit"][0].isdigit() and 1 <= int(query["limit"][0]) <= 200):
+                    fail(at, "`limit` is 1 to 200")
+            elif route == ("GET", "/totals"):
+                if not set(query) <= TOTALS_QUERY:
+                    fail(at, f"unknown query parameters {sorted(set(query) - TOTALS_QUERY)}")
+                for key, values in query.items():
+                    if not DATE.fullmatch(values[0]):
+                        fail(at, f"`{key}` must be YYYY-MM-DD")
+            elif query:
+                fail(at, f"{path} takes no query parameters")
+            body_m = re.search(r"-d '(.*?)'", cmd, re.S)
+            if method == "GET" and body_m:
+                fail(at, "a GET has no body")
+            if route == ("POST", "/changes"):
+                if not body_m:
+                    fail(at, "a proposal needs a body")
+                    continue
+                try:
+                    payload = json.loads(body_m.group(1))
+                except json.JSONDecodeError as e:
+                    fail(at, f"invalid JSON body: {e}")
+                    continue
+                check_proposal(at, payload, known_entries, known_people)
+                requests[payload.get("summary")] = payload
+    for route in sorted(set(PARTNER_ROUTES) - covered - {("POST", "/import")}):
+        fail(where, f"no curl example for {route[0]} {route[1]}")
+
+    # --- The responses. ---
+    for offset, body in blocks:
+        at = f"{where} json block at offset {offset}"
+        if not isinstance(body, dict):
+            fail(at, "a response is a JSON object")
+        elif "pending_change" in body:
+            check_pending_change(at, body, requests)
+        elif "entries" in body:
+            rows, page = body["entries"], body.get("pagination", {})
+            for i, row in enumerate(rows):
+                check_entry_row(f"{at} entries[{i}]", row, detail=False)
+            if set(page) != {"limit", "has_more", "next_cursor"}:
+                fail(at, "`pagination` has limit, has_more and next_cursor")
+            elif page["has_more"] != (page["next_cursor"] is not None):
+                fail(at, "`next_cursor` is set exactly when `has_more` is true")
+            elif page["next_cursor"] and rows and page["next_cursor"] != {"date": rows[-1]["derived"]["date"], "id": rows[-1]["id"]}:
+                fail(at, "`next_cursor` must point at the last entry of the page")
+        elif "entry" in body:
+            check_entry_row(at, body["entry"], detail=True)
+        elif "people" in body:
+            for person in body["people"]:
+                if set(person) != PERSON_ROW_KEYS:
+                    fail(at, "a person row has the documented keys only")
+        elif "aircraft" in body:
+            for plane in body["aircraft"]:
+                if set(plane) != AIRCRAFT_ROW_KEYS:
+                    fail(at, "an aircraft row has the documented keys only")
+        elif "totals" in body:
+            cov = body.get("coverage", {})
+            if set(cov) != {"total", "computed", "pending", "failed"} or cov["computed"] + cov["pending"] + cov["failed"] != cov["total"]:
+                fail(at, "`coverage` must add up: computed + pending + failed = total")
+            if body["totals"].get("entry_count") != cov.get("computed"):
+                fail(at, "`entry_count` is the number of computed flights")
+        elif "access_token" in body:
+            if (body.get("token_type"), body.get("expires_in")) != ("Bearer", 3600) or body.get("scope") not in LEVELS:
+                fail(at, "a token response is Bearer, 3600 seconds, and one of the two levels")
+        elif "user_id" in body:
+            if not UUID.fullmatch(body["user_id"]) or body.get("self_person_id") != body["user_id"]:
+                fail(at, "`self_person_id` is the pilot's own id")
+        elif "error" in body:
+            err = body["error"]
+            if not (isinstance(err, str) or (isinstance(err, dict) and "message" in err)):
+                fail(at, "an error body is `{\"error\": \"code\"}` or `{\"error\": {\"message\": ...}}`")
+        else:
+            fail(at, "a json block of a kind the validator does not know")
+
+    # --- The tables agree with the constants above. ---
+    def section(heading: str) -> str:
+        found = re.search(rf"^#+ {re.escape(heading)}\n(.*?)(?=^#+ |\Z)", text, re.S | re.M)
+        if not found:
+            fail(where, f"no section called {heading!r}")
+        return found.group(1) if found else ""
+
+    def table_keys(heading: str) -> set[str]:
+        """Every backticked name in the first column of the first table of a section."""
+        keys: set[str] = set()
+        table = re.search(r"^\| .*\n\| :--.*\n((?:\| .*\n?)+)", section(heading), re.M)
+        for row in re.finditer(r"^\| (.+?) \|", table.group(1) if table else "", re.M):
+            keys |= set(re.findall(r"`([^`]+)`", row.group(1)))
+        return keys
+
+    routes_doc = {}
+    for key in table_keys("The routes"):
+        method, path = key.split(" ", 1)
+        scope = re.search(rf"^\| `{re.escape(key)}` \| `(\w+)` \|", section("The routes"), re.M)
+        routes_doc[(method, path)] = scope.group(1) if scope else None
+    if routes_doc != PARTNER_ROUTES:
+        fail(where, f"the routes table differs from the validator: {sorted(set(routes_doc.items()) ^ set(PARTNER_ROUTES.items()), key=str)}")
+    if table_keys("Statuses") != STATUSES:
+        fail(where, f"the statuses table differs from the validator: {sorted(table_keys('Statuses') ^ STATUSES)}")
+    for heading, expected, label in (
+        ("The operations format", OPERATION_FIELDS, "operation fields"),
+        ("Fields of a flight", ENTRY_DATA_KEYS, "flight fields"),
+        ("Fields of a crew member", PERSON_DATA_KEYS, "crew member fields"),
+        ("GET /entries", ENTRIES_QUERY, "GET /entries parameters"),
+    ):
+        documented = table_keys(heading)
+        if documented != expected:
+            fail(where, f"the {label} table differs from the validator: {sorted(documented ^ expected)}")
+
+    # --- The authorization request and the level names agree with MIGRATION.md. ---
+    for sh in re.finditer(r"```sh\n(.*?)\n```", text, re.S):
+        block = sh.group(1)
+        for key, expected in (
+            ("client_id", {document["client_id"]} if document else set()),
+            ("redirect_uri", set(document["redirect_uris"]) if document else set()),
+            ("resource", {RESOURCE}),
+            ("scope", LEVELS),
+        ):
+            for raw in re.findall(rf"[?&\"\s]{key}=([^&\"\s]+)", block):
+                value = urllib.parse.unquote(raw)
+                if value not in expected:
+                    fail(f"{where} sh block at offset {sh.start()}", f"{key}={value} does not match MIGRATION.md / the two levels")
+
+
+for name in DOCS + [MIGRATION, PARTNER]:
     doc_text = (ROOT / name).read_text()
     check_auth_blocks(name, doc_text, headings_of(doc_text))
-check_migration()
+check_partner_api(check_migration())
 check_anchors()
 
 # --- Global invariants: every curl body and every link found anywhere should
@@ -374,8 +848,14 @@ if checked["links_matched"] != checked["deeplink"]:
         "unmatched link?)",
     )
 
-total = checked["json"] + checked["curl"] + checked["migration_curl"] + checked["deeplink"]
-if checked["auth_blocks"] == 0 or checked["anchors"] == 0 or checked["migration_curl"] == 0:
+total = (
+    checked["json"] + checked["curl"] + checked["migration_curl"] + checked["deeplink"]
+    + checked["partner_curl"] + checked["partner_json"]
+)
+if (
+    checked["auth_blocks"] == 0 or checked["anchors"] == 0 or checked["migration_curl"] == 0
+    or checked["partner_curl"] == 0 or checked["partner_json"] == 0
+):
     fail("global", "the URL, header and anchor checks found nothing to check")
 if errors:
     print(f"✗ {len(errors)} problem(s) in {total} example(s):\n")
@@ -388,5 +868,6 @@ print(
     f"({checked['json']} json, {checked['curl']} curl, {checked['deeplink']} deeplink/link, "
     f"{checked['links_matched']} links matched to their JSON block, "
     f"{checked['curl_matched']} curl bodies matched to their JSON block; "
+    f"{checked['partner_curl']} partner API curls and {checked['partner_json']} responses in {PARTNER}; "
     f"{checked['auth_blocks']} sh blocks checked for URL and header, {checked['anchors']} heading links resolved)"
 )
