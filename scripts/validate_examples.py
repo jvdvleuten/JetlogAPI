@@ -7,7 +7,11 @@ decode, an example that violates a rule the docs themselves state, a curl
 `-d` body that has drifted from the JSON block it illustrates, an orphan
 "Open this example in Jetlog" link with nothing to pair it to, or a clickable
 link whose encoded payload has drifted from the JSON block sitting right next
-to it.
+to it. It also checks the authentication the docs show: every curl to an import
+route uses the token route with an access token, the key route appears only
+under a "Deprecated" heading, and the OAuth examples in MIGRATION.md agree with
+each other (one metadata document, and the same client_id, redirect_uri,
+scope and resource in every request). Markdown links to a heading must resolve.
 
 This is a docs-only check — it needs nothing but Python. It cannot tell you what
 the server DOES with a payload; the two code repos own that:
@@ -29,6 +33,11 @@ import urllib.parse
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCS = ["README.md", "EXAMPLES.md"]
+MIGRATION = "MIGRATION.md"
+TOKEN_ROUTE = "https://jetlog.app/api/partner/v1/import"
+KEY_ROUTE = "https://jetlog.app/external/v1/import"
+OAUTH_BASE = "https://jetlog.app/oauth/"
+RESOURCE = "https://jetlog.app/api/partner/v1"
 
 errors: list[str] = []
 checked = {
@@ -37,6 +46,9 @@ checked = {
     "deeplink": 0,
     "links_matched": 0,
     "curl_matched": 0,
+    "auth_blocks": 0,
+    "migration_curl": 0,
+    "anchors": 0,
 }
 
 
@@ -237,6 +249,113 @@ for name in DOCS:
         else:
             checked["links_matched"] += 1
 
+def heading_slug(heading: str) -> str:
+    """GitHub's anchor for a heading: lowercase, punctuation dropped, spaces to hyphens."""
+    heading = heading.replace("`", "").strip().lower()
+    return re.sub(r"[^\w\- ]", "", heading).replace(" ", "-")
+
+
+def headings_of(text: str) -> list[tuple[int, str]]:
+    """(offset, heading text) for every markdown heading outside code fences."""
+    found = []
+    for m in re.finditer(r"^(```.*?^```)|^#{1,6} +(.+?)\s*$", text, re.S | re.M):
+        if m.group(2):
+            found.append((m.start(), m.group(2)))
+    return found
+
+
+def check_auth_blocks(name: str, text: str, headings: list[tuple[int, str]]) -> None:
+    """URLs and the Authorization header of every sh block that talks to Jetlog."""
+    allowed = {TOKEN_ROUTE, KEY_ROUTE} | {OAUTH_BASE + p for p in ("authorize", "token", "revoke")}
+    for m in re.finditer(r"```sh\n(.*?)\n```", text, re.S):
+        block = m.group(1)
+        urls = [u.split("?")[0] for u in re.findall(r"(?<!resource=)https://jetlog\.app/(?:external|api|oauth)/[^\s\"'\\]+", block)]
+        if not urls:
+            continue
+        checked["auth_blocks"] += 1
+        where = f"{name} sh block at offset {m.start()}"
+        for url in urls:
+            if url not in allowed:
+                fail(where, f"unexpected Jetlog URL {url}")
+        if TOKEN_ROUTE in urls and 'Authorization: Bearer $ACCESS_TOKEN"' not in block:
+            fail(where, "a token route call must send `Authorization: Bearer $ACCESS_TOKEN`")
+        if KEY_ROUTE in urls:
+            under = [h for off, h in headings if off < m.start()]
+            if name == "EXAMPLES.md" or not under or "deprecated" not in under[-1].lower():
+                fail(where, "the key route may only appear under a heading that says Deprecated")
+            if "Bearer $USER_KEY:$PARTNER_KEY" not in block:
+                fail(where, "a key route call must send `Bearer $USER_KEY:$PARTNER_KEY`")
+
+
+def check_anchors() -> None:
+    """Every `](#anchor)` and `](FILE.md#anchor)` link must hit a real heading."""
+    slugs = {}
+    for doc in DOCS + [MIGRATION]:
+        slugs[doc] = {heading_slug(h) for _, h in headings_of((ROOT / doc).read_text())}
+    for doc in DOCS + [MIGRATION]:
+        for m in re.finditer(r"\]\(([A-Za-z]+\.md)?#([^)\s]+)\)", (ROOT / doc).read_text()):
+            target = m.group(1) or doc
+            checked["anchors"] += 1
+            if m.group(2) not in slugs.get(target, set()):
+                fail(f"{doc} link", f"#{m.group(2)} is not a heading in {target}")
+
+
+def check_migration() -> None:
+    """MIGRATION.md: JSON parses, the metadata document obeys its own rules, the
+    OAuth requests agree with it, and the import example is a valid API payload."""
+    text = (ROOT / MIGRATION).read_text()
+    document = None
+    for m in re.finditer(r"```json\n(.*?)\n```", text, re.S):
+        try:
+            parsed = json.loads(m.group(1))
+        except json.JSONDecodeError as e:
+            fail(f"{MIGRATION} json block", f"invalid JSON: {e}")
+            continue
+        checked["json"] += 1
+        if isinstance(parsed, dict) and "redirect_uris" in parsed:
+            document = parsed
+        if isinstance(parsed, dict) and "access_token" in parsed:
+            if (parsed.get("token_type"), parsed.get("expires_in"), parsed.get("scope")) != ("Bearer", 3600, "import"):
+                fail(f"{MIGRATION} token response", "token_type, expires_in and scope must be Bearer, 3600 and import")
+
+    if document is None:
+        fail(MIGRATION, "no metadata document example found")
+        return
+    client_id = document.get("client_id", "")
+    name = document.get("client_name", "")
+    uris = document.get("redirect_uris", [])
+    if not client_id.startswith("https://") or ":" in client_id.split("/")[2]:
+        fail(f"{MIGRATION} metadata document", "client_id must be an https URL on port 443")
+    if not (0 < len(name) <= 64 and re.fullmatch(r"[\x20-\x7E]+", name)):
+        fail(f"{MIGRATION} metadata document", "client_name must be 1 to 64 printable ASCII characters")
+    if not uris or not all(isinstance(u, str) and u.startswith("https://") and len(u) <= 255 for u in uris):
+        fail(f"{MIGRATION} metadata document", "redirect_uris must be a non-empty list of https URIs")
+
+    # Every request in the guide must use values the document declares.
+    for m in re.finditer(r"```sh\n(.*?)\n```", text, re.S):
+        block = m.group(1)
+        for key, expected in (("client_id", {client_id}), ("redirect_uri", set(uris)), ("resource", {RESOURCE}), ("scope", {"import"})):
+            for raw in re.findall(rf"[?&\"\s]{key}=([^&\"\s]+)", block):
+                value = urllib.parse.unquote(raw)
+                if value not in expected:
+                    fail(f"{MIGRATION} sh block at offset {m.start()}", f"{key}={value} does not match the metadata document / fixed values")
+        if TOKEN_ROUTE in block:
+            for body_m in re.finditer(r"-d '(.*?)'", block, re.S):
+                try:
+                    payload = json.loads(body_m.group(1))
+                except json.JSONDecodeError as e:
+                    fail(f"{MIGRATION} curl body", f"invalid JSON: {e}")
+                    continue
+                checked["migration_curl"] += 1
+                check_entries_payload(f"{MIGRATION} curl body", payload, deeplink=False)
+
+
+for name in DOCS + [MIGRATION]:
+    doc_text = (ROOT / name).read_text()
+    check_auth_blocks(name, doc_text, headings_of(doc_text))
+check_migration()
+check_anchors()
+
 # --- Global invariants: every curl body and every link found anywhere should
 # have been claimed by exactly one pairing above. A leftover count here means
 # something drifted past the per-example checks (e.g. two links in a gap,
@@ -255,7 +374,9 @@ if checked["links_matched"] != checked["deeplink"]:
         "unmatched link?)",
     )
 
-total = checked["json"] + checked["curl"] + checked["deeplink"]
+total = checked["json"] + checked["curl"] + checked["migration_curl"] + checked["deeplink"]
+if checked["auth_blocks"] == 0 or checked["anchors"] == 0 or checked["migration_curl"] == 0:
+    fail("global", "the URL, header and anchor checks found nothing to check")
 if errors:
     print(f"✗ {len(errors)} problem(s) in {total} example(s):\n")
     for e in errors:
@@ -266,5 +387,6 @@ print(
     f"✓ {total} examples valid "
     f"({checked['json']} json, {checked['curl']} curl, {checked['deeplink']} deeplink/link, "
     f"{checked['links_matched']} links matched to their JSON block, "
-    f"{checked['curl_matched']} curl bodies matched to their JSON block)"
+    f"{checked['curl_matched']} curl bodies matched to their JSON block; "
+    f"{checked['auth_blocks']} sh blocks checked for URL and header, {checked['anchors']} heading links resolved)"
 )
