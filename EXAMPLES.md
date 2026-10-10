@@ -23,7 +23,7 @@ flows; see the README's schema table for specifics.
 Times are `HH:MM` zulu relative to `date`. Dates are strictly `YYYY-MM-DD` —
 `01-03-2026` is rejected by both flows.
 
-The curl calls send the payload to the token route, `https://jetlog.app/api/partner/v1/import`, and expect an access token the pilot approved in `$ACCESS_TOKEN`. How a partner gets that token is in [MIGRATION.md](MIGRATION.md). The deprecated key route, `/external/v1/import`, takes the same payloads.
+The curl calls send the payload to the token route, `https://jetlog.app/api/partner/v1/import`, and expect an access token the pilot approved in `$ACCESS_TOKEN`. How a partner gets that token is in [GETTING_STARTED.md](GETTING_STARTED.md). The deprecated key route, `/external/v1/import`, takes the same payloads.
 
 ---
 
@@ -272,7 +272,7 @@ curl -X POST https://jetlog.app/api/partner/v1/import \
 
 ### Deleting a flight you imported (deeplink-safe)
 
-Only ever affects an entry this caller created. Send `"is_deleted": false` with the same identity to restore it.
+Only ever affects an entry this caller created. Send `"is_deleted": false` with the same identity to restore it. On the API, a row with `"is_deleted": true` that matches no flight this caller added is skipped as `unknown` and nothing is written. The answer is the same when the pilot has that flight from another source.
 
 ```json
 {
@@ -448,13 +448,15 @@ curl -X POST https://jetlog.app/api/partner/v1/import \
   {"date": "2026-08-16", "flight_number": "SIM1", "type": "fstd", "reason": "unsupported_type"},
   {"date": "2026-08-17", "flight_number": "KL1701", "from": "EHAM", "to": "LTFM", "reason": "duplicate_in_payload"},
   {"date": "2026-08-20", "flight_number": "KL2001", "from": "EHAM", "to": "EDDF", "reason": "deleted"},
+  {"date": "2026-08-21", "flight_number": "KL2002", "from": "EHAM", "to": "LFPG", "reason": "unknown"},
   {"date": "2026-08-18", "flight_number": "KL1801", "reason": "invalid_field", "fields": ["off_blocks"]},
   {"date": "2026-08-19", "flight_number": "KL1802", "reason": "invalid_field", "fields": ["takeoffs_and_landings.landings"]}
 ]}
 ```
 
 - `duplicate` — the flight already exists from another source (the app, a roster
-  import, another partner). Those are never modified.
+  import, another partner). Those are never modified. A row with
+  `"is_deleted": true` is answered as `unknown` instead.
 - `missing_route` — `from`/`to` were absent, which the API requires.
 - `unsupported_type` — `type` was not `"flight"`. Carries `type` as well, and
   nothing is stored for that row.
@@ -465,6 +467,9 @@ curl -X POST https://jetlog.app/api/partner/v1/import \
   soft-deleted, and this row said nothing about `is_deleted`. Send
   `is_deleted: false` with the same identity to restore it instead of
   resending the row as-is.
+- `unknown`: the row had `"is_deleted": true` and matches no flight this caller
+  added. Nothing is written, and the answer is the same whether or not the pilot
+  has that flight from another source.
 - `invalid_field` — the row failed the same field-level validation a direct
   write would (an unparsable time, an incomplete `takeoffs_and_landings`
   pair, ...); `fields` names what failed. Only this row is skipped, the rest
@@ -502,7 +507,7 @@ safe to resend the same payload — those people will match on the retry
 instead of being duplicated.
 
 The errors that come from authentication and limits on the token route (`401`,
-`403`, `413` and `429`) are listed in [MIGRATION.md](MIGRATION.md#errors-on-the-token-route).
+`403`, `413` and `429`) are listed in [GETTING_STARTED.md](GETTING_STARTED.md#errors-on-the-token-route).
 
 ---
 
