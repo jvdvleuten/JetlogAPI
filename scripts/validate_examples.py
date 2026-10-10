@@ -9,13 +9,13 @@ decode, an example that violates a rule the docs themselves state, a curl
 link whose encoded payload has drifted from the JSON block sitting right next
 to it. It also checks the authentication the docs show: every curl to a partner
 route uses an access token, the key route appears only under a "Deprecated"
-heading, and the OAuth examples in MIGRATION.md agree with each other (one
-metadata document, and the same client_id, redirect_uri, scope and resource in
-every request). PARTNER_API.md gets the same treatment for its own examples:
+heading, and the OAuth examples in GETTING_STARTED.md agree with each other (one
+sample app id and one metadata document, and the same client_id, redirect_uri,
+scope and resource in every request). PARTNER_API.md gets the same treatment for its own examples:
 every curl names a real partner route with the right method, query parameters
 and body, every proposal request follows the operations format, every response
 has the documented shape, and the examples agree with each other. Markdown
-links to a heading must resolve.
+links to a heading must resolve, and so must every link to another guide.
 
 This is a docs-only check — it needs nothing but Python. It cannot tell you what
 the server DOES with a payload; the two code repos own that:
@@ -38,8 +38,10 @@ import urllib.parse
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DOCS = ["README.md", "EXAMPLES.md"]
+GETTING_STARTED = "GETTING_STARTED.md"
 MIGRATION = "MIGRATION.md"
 PARTNER = "PARTNER_API.md"
+ALL_DOCS = DOCS + [GETTING_STARTED, MIGRATION, PARTNER]
 TOKEN_ROUTE = "https://jetlog.app/api/partner/v1/import"
 PARTNER_BASE = "https://jetlog.app/api/partner/v1"
 KEY_ROUTE = "https://jetlog.app/external/v1/import"
@@ -54,7 +56,7 @@ checked = {
     "links_matched": 0,
     "curl_matched": 0,
     "auth_blocks": 0,
-    "migration_curl": 0,
+    "start_curl": 0,
     "anchors": 0,
     "partner_curl": 0,
     "partner_json": 0,
@@ -322,71 +324,95 @@ def check_auth_blocks(name: str, text: str, headings: list[tuple[int, str]]) -> 
 
 
 def check_anchors() -> None:
-    """Every `](#anchor)` and `](FILE.md#anchor)` link must hit a real heading."""
+    """Every `](#anchor)` and `](FILE.md#anchor)` link must hit a real heading, and every
+    `](FILE.md)` link must name a guide of this repo."""
     slugs = {}
-    for doc in DOCS + [MIGRATION, PARTNER]:
+    for doc in ALL_DOCS:
         slugs[doc] = {heading_slug(h) for _, h in headings_of((ROOT / doc).read_text())}
-    for doc in DOCS + [MIGRATION, PARTNER]:
-        for m in re.finditer(r"\]\(([A-Za-z_]+\.md)?#([^)\s]+)\)", (ROOT / doc).read_text()):
+    for doc in ALL_DOCS:
+        text = (ROOT / doc).read_text()
+        for m in re.finditer(r"\]\(([A-Za-z_]+\.md)?#([^)\s]+)\)", text):
             target = m.group(1) or doc
             checked["anchors"] += 1
             if m.group(2) not in slugs.get(target, set()):
                 fail(f"{doc} link", f"#{m.group(2)} is not a heading in {target}")
+        for m in re.finditer(r"\]\(([A-Za-z_]+\.md)\)", text):
+            checked["anchors"] += 1
+            if not (ROOT / m.group(1)).is_file():
+                fail(f"{doc} link", f"{m.group(1)} is not a file of this repo")
 
 
-def check_migration() -> None:
-    """MIGRATION.md: JSON parses, the metadata document obeys its own rules, the
-    OAuth requests agree with it, and the import example is a valid API payload."""
-    text = (ROOT / MIGRATION).read_text()
+APP_ID_RE = r"jetlog_app_[A-Za-z0-9_-]{43}"
+
+
+def sample_app_id() -> str:
+    """The one sample app id of the docs: the app id that GETTING_STARTED.md shows as what the
+    registration form answers with. Every `client_id` in every example must be this one."""
+    text = (ROOT / GETTING_STARTED).read_text()
+    form = re.search(r"^#### With a form\n(.*?)(?=^#{1,4} )", text, re.S | re.M)
+    found = re.search(rf"^```\n({APP_ID_RE})\n```", form.group(1) if form else "", re.M)
+    if not found:
+        fail(GETTING_STARTED, "the section 'With a form' must show the app id of the form's answer in a code block, jetlog_app_ plus 43 base64url characters")
+        return ""
+    return found.group(1)
+
+
+def check_getting_started() -> tuple[dict | None, str]:
+    """GETTING_STARTED.md: JSON parses, the metadata document obeys its own rules, the
+    OAuth requests use the sample app id and the document's redirect addresses, and the
+    import example is a valid API payload."""
+    text = (ROOT / GETTING_STARTED).read_text()
+    app_id = sample_app_id()
     document = None
     for m in re.finditer(r"```json\n(.*?)\n```", text, re.S):
         try:
             parsed = json.loads(m.group(1))
         except json.JSONDecodeError as e:
-            fail(f"{MIGRATION} json block", f"invalid JSON: {e}")
+            fail(f"{GETTING_STARTED} json block", f"invalid JSON: {e}")
             continue
         checked["json"] += 1
         if isinstance(parsed, dict) and "redirect_uris" in parsed:
             document = parsed
         if isinstance(parsed, dict) and "access_token" in parsed:
             if (parsed.get("token_type"), parsed.get("expires_in"), parsed.get("scope")) != ("Bearer", 3600, "import"):
-                fail(f"{MIGRATION} token response", "token_type, expires_in and scope must be Bearer, 3600 and import")
+                fail(f"{GETTING_STARTED} token response", "token_type, expires_in and scope must be Bearer, 3600 and import")
 
     if document is None:
-        fail(MIGRATION, "no metadata document example found")
-        return None
+        fail(GETTING_STARTED, "no metadata document example found")
+        return None, app_id
     # The verification value of the developer console: `jld_` and 26 lowercase base32
     # characters. It is not a secret, so the example shows a value shaped like a real one.
     if not re.fullmatch(r"jld_[a-z2-7]{26}", str(document.get("jetlog_developer", ""))):
-        fail(f"{MIGRATION} metadata document", "`jetlog_developer` must be present and shaped like jld_ plus 26 lowercase base32 characters")
-    client_id = document.get("client_id", "")
+        fail(f"{GETTING_STARTED} metadata document", "`jetlog_developer` must be present and shaped like jld_ plus 26 lowercase base32 characters")
+    doc_client_id = document.get("client_id", "")
     name = document.get("client_name", "")
     uris = document.get("redirect_uris", [])
-    if not client_id.startswith("https://") or ":" in client_id.split("/")[2]:
-        fail(f"{MIGRATION} metadata document", "client_id must be an https URL on port 443")
+    if not doc_client_id.startswith("https://") or ":" in doc_client_id.split("/")[2]:
+        fail(f"{GETTING_STARTED} metadata document", "client_id must be an https URL on port 443")
     if not (0 < len(name) <= 64 and re.fullmatch(r"[\x20-\x7E]+", name)):
-        fail(f"{MIGRATION} metadata document", "client_name must be 1 to 64 printable ASCII characters")
+        fail(f"{GETTING_STARTED} metadata document", "client_name must be 1 to 64 printable ASCII characters")
     if not uris or not all(isinstance(u, str) and u.startswith("https://") and len(u) <= 255 for u in uris):
-        fail(f"{MIGRATION} metadata document", "redirect_uris must be a non-empty list of https URIs")
+        fail(f"{GETTING_STARTED} metadata document", "redirect_uris must be a non-empty list of https URIs")
 
-    # Every request in the guide must use values the document declares.
+    # Every request in the guide uses the sample app id, a redirect address of the document
+    # (the sample app registered the same addresses), and the fixed values.
     for m in re.finditer(r"```sh\n(.*?)\n```", text, re.S):
         block = m.group(1)
-        for key, expected in (("client_id", {client_id}), ("redirect_uri", set(uris)), ("resource", {RESOURCE}), ("scope", {"import"})):
+        for key, expected in (("client_id", {app_id}), ("redirect_uri", set(uris)), ("resource", {RESOURCE}), ("scope", {"import"})):
             for raw in re.findall(rf"[?&\"\s]{key}=([^&\"\s]+)", block):
                 value = urllib.parse.unquote(raw)
                 if value not in expected:
-                    fail(f"{MIGRATION} sh block at offset {m.start()}", f"{key}={value} does not match the metadata document / fixed values")
+                    fail(f"{GETTING_STARTED} sh block at offset {m.start()}", f"{key}={value} does not match the sample app id / the metadata document / fixed values")
         if TOKEN_ROUTE in block:
             for body_m in re.finditer(r"-d '(.*?)'", block, re.S):
                 try:
                     payload = json.loads(body_m.group(1))
                 except json.JSONDecodeError as e:
-                    fail(f"{MIGRATION} curl body", f"invalid JSON: {e}")
+                    fail(f"{GETTING_STARTED} curl body", f"invalid JSON: {e}")
                     continue
-                checked["migration_curl"] += 1
-                check_entries_payload(f"{MIGRATION} curl body", payload, deeplink=False)
-    return document
+                checked["start_curl"] += 1
+                check_entries_payload(f"{GETTING_STARTED} curl body", payload, deeplink=False)
+    return document, app_id
 
 
 # ---------------------------------------------------------------------------
@@ -735,7 +761,7 @@ def check_pending_change(where: str, body: dict, requests: dict[str, dict]) -> N
             fail(where, f"operation {stored['index']} `id` differs from the request")
 
 
-def check_partner_api(document: dict | None) -> None:
+def check_partner_api(document: dict | None, app_id: str) -> None:
     """PARTNER_API.md: every curl is a real route, every body and response has the documented shape."""
     text = (ROOT / PARTNER).read_text()
     where = PARTNER
@@ -1006,11 +1032,11 @@ def check_partner_api(document: dict | None) -> None:
         if route == "POST /import" and status == "413" and f'"max_bytes":{BODY_LIMITS[route]}' not in shown:
             fail(where, f"the 413 of {route} names {BODY_LIMITS[route]} bytes")
 
-    # --- The authorization request and the level names agree with MIGRATION.md. ---
+    # --- The authorization request and the level names agree with GETTING_STARTED.md. ---
     for sh in re.finditer(r"```sh\n(.*?)\n```", text, re.S):
         block = sh.group(1)
         for key, expected in (
-            ("client_id", {document["client_id"]} if document else set()),
+            ("client_id", {app_id}),
             ("redirect_uri", set(document["redirect_uris"]) if document else set()),
             ("resource", {RESOURCE}),
             ("scope", LEVELS),
@@ -1018,14 +1044,14 @@ def check_partner_api(document: dict | None) -> None:
             for raw in re.findall(rf"[?&\"\s]{key}=([^&\"\s]+)", block):
                 value = urllib.parse.unquote(raw)
                 if value not in expected:
-                    fail(f"{where} sh block at offset {sh.start()}", f"{key}={value} does not match MIGRATION.md / the two levels")
+                    fail(f"{where} sh block at offset {sh.start()}", f"{key}={value} does not match GETTING_STARTED.md / the two levels")
 
 
 def check_registration() -> None:
     """A new app registers in the developer console. Mailing the URL of a metadata
     document is only right for a partner that already uses the key pair, and no document
     calls an app or its host verified."""
-    for name in DOCS + [MIGRATION, PARTNER]:
+    for name in ALL_DOCS:
         text = (ROOT / name).read_text()
         if re.search(r"\b(send|email|mail)\b[^.\n]{0,100}\b(URL|address)\b[^.\n]{0,100}support@jetlog\.app", text, re.I):
             fail(name, "tells a developer to mail the URL of the metadata document to support@jetlog.app; a new app registers in the developer console")
@@ -1033,36 +1059,75 @@ def check_registration() -> None:
             fail(name, "whole-logbook access is requested in the developer console, not by email")
         if re.search(r"\bverified\b", text, re.I):
             fail(name, "no document calls an app or its host verified (an app is registered with Jetlog under its name)")
-    for name in (ROOT / "README.md", ROOT / MIGRATION, ROOT / PARTNER):
-        if "https://jetlog.app/developers/console" not in name.read_text():
-            fail(name.name, "must point to the developer console, https://jetlog.app/developers/console")
+        if "No shared secret" in text:
+            fail(name, "an app can have a client secret, so no document says the token route has no shared secret")
+    for name in ("README.md", GETTING_STARTED, PARTNER):
+        if "https://jetlog.app/developers/console" not in (ROOT / name).read_text():
+            fail(name, "must point to the developer console, https://jetlog.app/developers/console")
+    start = (ROOT / GETTING_STARTED).read_text()
     migration = (ROOT / MIGRATION).read_text()
     for needle in (
-        "https://jetlog.app/developers", "jetlog_developer", "Registered with Jetlog under this name", "already uses the key pair",
+        "https://jetlog.app/developers", "jetlog_developer", "Registered with Jetlog under this name",
         "app id", "in development", "Confirm with an emailed code", "valid for 10 minutes",
+        "Developer Terms", "https://jetlog.app/developers/terms",
     ):
-        if needle not in migration:
-            fail(MIGRATION, f"the registration step must mention {needle!r}")
-    # An app registered with the form gets an id `jetlog_app_` plus 43 base64url characters.
-    for name in DOCS + [MIGRATION, PARTNER]:
+        if needle not in start:
+            fail(GETTING_STARTED, f"the registration step must mention {needle!r}")
+    # The sentence that tells an app registered with a metadata document that its client_id is the
+    # document's address, in the place where registration is explained.
+    registration = re.search(r"^### 1\. Register your app\n(.*?)(?=^### )", start, re.S | re.M)
+    if not registration or not re.search(r"registered with a metadata document uses the document's address as its `client_id`", registration.group(1)):
+        fail(GETTING_STARTED, "step 1 must say that an app registered with a metadata document uses the document's address as its `client_id`")
+    # An app registered with the form gets an id `jetlog_app_` plus 43 base64url characters, and
+    # every example shows the same one.
+    seen = set()
+    for name in ALL_DOCS:
         for app_id in re.findall(r"jetlog_app_[A-Za-z0-9_-]*", (ROOT / name).read_text()):
-            if not re.fullmatch(r"jetlog_app_[A-Za-z0-9_-]{43}", app_id):
+            seen.add(app_id)
+            if not re.fullmatch(APP_ID_RE, app_id):
                 fail(name, f"the app id {app_id!r} must be jetlog_app_ plus 43 base64url characters")
+    if len(seen) != 1:
+        fail("global", f"the docs must show one sample app id, found {len(seen)}: {sorted(seen)}")
     # An app with a client secret keeps its refresh token, so no document may say that a refresh always replaces it.
-    for name in DOCS + [MIGRATION, PARTNER]:
+    for name in ALL_DOCS:
         text = (ROOT / name).read_text()
         for stale in ("replaced on every use", "good for one refresh", "Every refresh replaces the refresh token"):
             if stale in text:
                 fail(name, f"{stale!r} is only true for an app without a client secret")
     if not re.search(r"existing[^.\n]{0,80}registration", migration):
         fail(MIGRATION, "a key pair partner asks Jetlog to link its document to its existing registration, and the guide must say so")
+    if "already uses the key pair" not in migration:
+        fail(MIGRATION, "the linking of an existing registration is for a partner that already uses the key pair, and the guide must say so")
+    if re.search(r"\bkey pair\b", start) and not re.search(r"\[MIGRATION\.md\]", start):
+        fail(GETTING_STARTED, "a mention of the key pair must point to MIGRATION.md")
 
 
-for name in DOCS + [MIGRATION, PARTNER]:
+def check_split() -> None:
+    """The getting started guide holds the steps of the token route and the migration guide holds
+    only what is specific to moving from the key pair: no heading is in both, the migration guide
+    sends its reader to the steps, and the README sends new integrations to the right guide."""
+    start_headings = {h for _, h in headings_of((ROOT / GETTING_STARTED).read_text())}
+    migration_headings = {h for _, h in headings_of((ROOT / MIGRATION).read_text())}
+    for heading in sorted(start_headings & migration_headings):
+        fail("split", f"the heading {heading!r} is in both {GETTING_STARTED} and {MIGRATION}")
+    migration = (ROOT / MIGRATION).read_text()
+    if f"]({GETTING_STARTED}" not in migration:
+        fail(MIGRATION, f"must link to {GETTING_STARTED} for the steps of the token route")
+    for heading in ("Register your app", "Exchange the code", "Refresh the access token", "Disconnect"):
+        if any(h.endswith(heading) for h in migration_headings):
+            fail(MIGRATION, f"the step {heading!r} belongs in {GETTING_STARTED}")
+    readme = (ROOT / "README.md").read_text()
+    for target in (GETTING_STARTED, MIGRATION):
+        if f"]({target}" not in readme:
+            fail("README.md", f"must point to {target}")
+
+
+for name in ALL_DOCS:
     doc_text = (ROOT / name).read_text()
     check_auth_blocks(name, doc_text, headings_of(doc_text))
 check_registration()
-check_partner_api(check_migration())
+check_split()
+check_partner_api(*check_getting_started())
 check_anchors()
 
 # --- Global invariants: every curl body and every link found anywhere should
@@ -1084,11 +1149,11 @@ if checked["links_matched"] != checked["deeplink"]:
     )
 
 total = (
-    checked["json"] + checked["curl"] + checked["migration_curl"] + checked["deeplink"]
+    checked["json"] + checked["curl"] + checked["start_curl"] + checked["deeplink"]
     + checked["partner_curl"] + checked["partner_json"]
 )
 if (
-    checked["auth_blocks"] == 0 or checked["anchors"] == 0 or checked["migration_curl"] == 0
+    checked["auth_blocks"] == 0 or checked["anchors"] == 0 or checked["start_curl"] == 0
     or checked["partner_curl"] == 0 or checked["partner_json"] == 0
 ):
     fail("global", "the URL, header and anchor checks found nothing to check")

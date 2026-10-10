@@ -23,7 +23,7 @@ flows; see the README's schema table for specifics.
 Times are `HH:MM` zulu relative to `date`. Dates are strictly `YYYY-MM-DD` —
 `01-03-2026` is rejected by both flows.
 
-The curl calls send the payload to the token route, `https://jetlog.app/api/partner/v1/import`, and expect an access token the pilot approved in `$ACCESS_TOKEN`. How a partner gets that token is in [MIGRATION.md](MIGRATION.md). The deprecated key route, `/external/v1/import`, takes the same payloads.
+The curl calls send the payload to the token route, `https://jetlog.app/api/partner/v1/import`, and expect an access token the pilot approved in `$ACCESS_TOKEN`. How a partner gets that token is in [GETTING_STARTED.md](GETTING_STARTED.md). The deprecated key route, `/external/v1/import`, takes the same payloads.
 
 ---
 
@@ -507,7 +507,7 @@ safe to resend the same payload — those people will match on the retry
 instead of being duplicated.
 
 The errors that come from authentication and limits on the token route (`401`,
-`403`, `413` and `429`) are listed in [MIGRATION.md](MIGRATION.md#errors-on-the-token-route).
+`403`, `413` and `429`) are listed in [GETTING_STARTED.md](GETTING_STARTED.md#errors-on-the-token-route).
 
 ---
 
