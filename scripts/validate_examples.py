@@ -440,7 +440,7 @@ ENTRY_TIME_KEYS = {"off_blocks", "airborne", "touchdown", "on_blocks"}
 # On a flight Jetlog tracks, these follow the flight feed: a proposal for them is refused.
 FEED_KEYS = ENTRY_TIME_KEYS | {"registration"}
 PERSON_DATA_KEYS = {
-    "first_name", "last_name", "default_role", "employee_number",
+    "first_name", "last_name", "default_role", "employee_number", "notes",
     "is_imported_from_other_logbook", "is_deleted",
 }
 MAX_CREW = 20
@@ -511,7 +511,7 @@ ENTRY_ROW_KEYS = {
 }
 DERIVED_KEYS = {"date", "registration", "from", "to", "off_blocks", "airborne", "touchdown", "on_blocks"}
 PERSON_ROW_KEYS = {
-    "id", "first_name", "last_name", "default_role", "employee_number",
+    "id", "first_name", "last_name", "default_role", "employee_number", "notes",
     "is_imported_from_other_logbook",
 }
 # Keys that must appear in no response example and in no field list: a partner is never
@@ -573,8 +573,9 @@ def check_data(where: str, resource: str, op: str, data: dict, known_people: set
         elif key not in allowed:
             fail(where, f"`{key}` is not a field a partner can set on a {resource}")
     for key, value in data.items():
-        if isinstance(value, str) and len(value) > 2000:
-            fail(where, f"`{key}` is longer than the 2000 characters a proposal allows")
+        limit = 10000 if resource == "person" and key == "notes" else 2000
+        if isinstance(value, str) and len(value) > limit:
+            fail(where, f"`{key}` is longer than the {limit} characters a proposal allows")
     if resource != "entry":
         return
     if op == "create":
