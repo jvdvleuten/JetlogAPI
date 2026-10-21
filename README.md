@@ -98,6 +98,7 @@ Top-level keys:
 | `last_name`       | String | Yes      | Last name.                         |
 | `default_role`    | String | No       | Default role.                      |
 | `employee_number` | String | No       | Employee number.                   |
+| `notes`           | String | No       | Free text about this person, at most 10000 characters. |
 
 **Notes on people**
 - You can use `SELF` in a flight without adding a top-level person for yourself.
@@ -208,7 +209,7 @@ Remarks are the pilot's own text, so an import can add them but not quietly repl
 | An `approaches` item with an unrecognised `type`, or a count below 1 | Entry still imports; only the invalid items are dropped, flagged as a per-row error in the import preview | Whole row skipped — `"invalid_field"`, e.g. `"fields": ["approaches.type"]` |
 | `remarks` on a re-import | Replace / Add choice in the preview | Write-once; never overwritten |
 | Unresolvable `people[].ref_id` | Kept for the import review to resolve | Entry still imports without that crew member; reported in the response's `warnings` array |
-| Matching an existing person | May update their `default_role`, but only when the payload actually supplies one — omitting it never wipes an existing role; also matches on a single name | Never modifies an existing person; matches `employee_number` then first+last only |
+| Matching an existing person | May update their `default_role`, but only when the payload actually supplies one — omitting it never wipes an existing role; fills `notes` only when the stored note is empty; also matches on a single name | Never modifies an existing person; matches `employee_number` then first+last only |
 
 ### Deeplink Import
 
@@ -319,7 +320,7 @@ Entries created through the older key authentication stay the partner's own afte
 - Entries from another source (the app itself, a roster import, another partner) are never modified. A row that adds or amends one comes back as `"duplicate"` in `skipped`, and a row with `is_deleted: true` comes back as `"unknown"`. This is about *live* rows only: if that other source's entry is itself soft-deleted, its identity is free — importing the same flight creates a new, live row alongside the deleted one rather than resurrecting or merging into it.
 - People:
   - A submitted person is matched against the people the user already has: first by `employee_number`, otherwise by `first_name` + `last_name` (ignoring case and surrounding whitespace).
-  - **A matched person is reused but never modified.** The API will not rename an existing contact, change their `default_role`, or alter their `employee_number` — this includes the user's own profile. Only a person matching nothing is created, using every field supplied.
+  - **A matched person is reused but never modified.** The API will not rename an existing contact, change their `default_role`, alter their `employee_number`, or change their `notes` — this includes the user's own profile. Only a person matching nothing is created, using every field supplied.
   - `SELF` = the authenticated user. A submitted person that matches the user's own profile resolves to it instead of creating a duplicate contact.
   - Two `ref_id`s resolving to the same person collapse to one crew assignment on an entry (the first `role` wins). A `ref_id` that resolves to nothing does not fail the entry: it imports without that crew member, and the response's `warnings` array gets an entry for it (see below).
   - Crew is merged, never replaced: omitting `people` — or sending `[]` — on a re-import keeps the existing crew. There is no way to remove crew from an entry via this API.

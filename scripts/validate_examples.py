@@ -440,7 +440,7 @@ ENTRY_TIME_KEYS = {"off_blocks", "airborne", "touchdown", "on_blocks"}
 # On a flight Jetlog tracks, these follow the flight feed: a proposal for them is refused.
 FEED_KEYS = ENTRY_TIME_KEYS | {"registration"}
 PERSON_DATA_KEYS = {
-    "first_name", "last_name", "default_role", "employee_number",
+    "first_name", "last_name", "default_role", "employee_number", "notes",
     "is_imported_from_other_logbook", "is_deleted",
 }
 MAX_CREW = 20
@@ -511,7 +511,7 @@ ENTRY_ROW_KEYS = {
 }
 DERIVED_KEYS = {"date", "registration", "from", "to", "off_blocks", "airborne", "touchdown", "on_blocks"}
 PERSON_ROW_KEYS = {
-    "id", "first_name", "last_name", "default_role", "employee_number",
+    "id", "first_name", "last_name", "default_role", "employee_number", "notes",
     "is_imported_from_other_logbook",
 }
 # Keys that must appear in no response example and in no field list: a partner is never

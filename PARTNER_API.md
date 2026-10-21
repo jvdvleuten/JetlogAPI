@@ -490,6 +490,7 @@ curl -sS https://jetlog.app/api/partner/v1/people \
       "last_name": "Jansen",
       "default_role": "PIC",
       "employee_number": "10432",
+      "notes": "Prefers the left seat",
       "is_imported_from_other_logbook": false
     },
     {
@@ -498,6 +499,7 @@ curl -sS https://jetlog.app/api/partner/v1/people \
       "last_name": "de Vries",
       "default_role": "FO",
       "employee_number": null,
+      "notes": null,
       "is_imported_from_other_logbook": false
     }
   ]
@@ -893,6 +895,7 @@ These are the fields of `data` for `resource` `person`.
 | `first_name`, `last_name` | The name. Send both when you create a person. |
 | `default_role` | The role Jetlog suggests for this person. |
 | `employee_number` | An employee number. |
+| `notes` | Free text about the person, at most 2000 characters in a proposal. An empty string clears it. |
 | `is_imported_from_other_logbook` | `true` when the person came from another logbook. |
 | `is_deleted` | `true` removes the person, the same as a `delete` operation. It has to be a JSON boolean, like on a flight, and an `update` that sets it to `true` carries no other field in `data`. |
 
