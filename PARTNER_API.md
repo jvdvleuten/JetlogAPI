@@ -849,7 +849,7 @@ The rules:
 - Two operations on the same record in one proposal are refused, with the `id` message `duplicate entry id <id> within this proposal` (or `duplicate person id <id> within this proposal`). Put every change to one record in one operation.
 - A `create` whose `id` already exists is refused.
 - An `update` or `delete` can only target a flight or a crew member that the read routes can show. A flight that was removed, a simulator session, an id that does not exist and a record of another pilot all answer `entry <id> not found` (or `person <id> not found`).
-- A text value is at most 2000 characters, and every value in `data` is a single value. Only `people` is a list.
+- A text value is at most 2000 characters, except `notes` of a person, which can be 10000. Every value in `data` is a single value. Only `people` is a list.
 - Jetlog applies people first and flights second, so a flight can refer to a person created in the same proposal.
 - A `delete` removes the flight or person. The pilot can undo an approved delete in the Jetlog app.
 - A proposal can target any flight of the pilot, including one your app added. The import route changes those flights without approval, so use it for your own flights and new flights, and use a proposal for the rest.
@@ -895,7 +895,7 @@ These are the fields of `data` for `resource` `person`.
 | `first_name`, `last_name` | The name. Send both when you create a person. |
 | `default_role` | The role Jetlog suggests for this person. |
 | `employee_number` | An employee number. |
-| `notes` | Free text about the person, at most 2000 characters in a proposal. An empty string clears it. |
+| `notes` | Free text about the person, at most 10000 characters. An empty string clears it. |
 | `is_imported_from_other_logbook` | `true` when the person came from another logbook. |
 | `is_deleted` | `true` removes the person, the same as a `delete` operation. It has to be a JSON boolean, like on a flight, and an `update` that sets it to `true` carries no other field in `data`. |
 
@@ -1130,7 +1130,7 @@ A body that is too large for the route answers `413` with a flat body that names
 | Body of `POST /import` | 2 MB |
 | Lifetime of a proposal | 24 hours |
 | Length of a summary | 500 characters |
-| Length of a text value in an operation | 2000 characters |
+| Length of a text value in an operation | 2000 characters, 10000 for the `notes` of a person |
 | Flights per page of `GET /entries` | 50 by default, 200 at most |
 | Access token | 1 hour |
 | Refresh token | 90 days. An app with a client secret keeps the same refresh token, an app without one gets a new one on every use |
