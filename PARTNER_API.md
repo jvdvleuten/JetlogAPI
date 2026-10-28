@@ -33,7 +33,7 @@ A pilot connects a partner at one of two levels. The pilot chooses when approvin
 | Level | Scope in the token | What the app can do |
 | :-- | :-- | :-- |
 | Own flights | `import` | Add flights with their crew, and change or remove the flights it added, through the import route. Nothing else. |
-| Whole logbook | `import read write` | Everything the own flights level can do. It can also read the whole logbook, and propose changes to flights and crew members. A proposal changes nothing until the pilot approves it in the Jetlog app. |
+| Whole logbook | `import read write` | Everything the own flights level can do. It can also read the whole logbook, and propose changes to flights, crew members and the pilot's own airports (places). A proposal changes nothing until the pilot approves it in the Jetlog app. |
 
 The three scopes mean this:
 
@@ -41,7 +41,7 @@ The three scopes mean this:
 - `read` is reading the logbook through the read routes.
 - `write` is proposing changes. It never applies them.
 
-Flights an app adds through the import route are written directly at both levels, and the app changes or removes those through the import route as well. At the whole logbook level, a change to a flight or crew member the app did not add can only be proposed. Whatever an app sends, it cannot change a flight it did not add unless the pilot approves that change.
+Flights an app adds through the import route are written directly at both levels, and the app changes or removes those through the import route as well. At the whole logbook level, a change to a flight, crew member or place the app did not add can only be proposed. Whatever an app sends, it cannot change a flight it did not add unless the pilot approves that change.
 
 The pilot can always grant the lower level when the wider one was asked. The pilot can also remove the app at any time under Settings > Connected Apps, which ends the connection.
 
@@ -185,6 +185,7 @@ All routes live under `https://jetlog.app/api/partner/v1`.
 | `GET /entries/:id` | `read` | One flight. |
 | `GET /people` | `read` | The pilot's crew list. |
 | `GET /aircraft` | `read` | The pilot's aircraft. |
+| `GET /places` | `read` | The pilot's own airports. |
 | `GET /totals` | `read` | The pilot's flight time totals. |
 | `POST /changes` | `write` | Proposes changes. Writes nothing. |
 | `GET /changes/:id` | `write` | The status of a proposal this connection made. |
@@ -216,7 +217,7 @@ Most limits are per connection. A connection is one pilot's approval of your app
 
 | Routes | What is counted | Per |
 | :-- | :-- | :-- |
-| `GET /me`, `GET /entries`, `GET /entries/:id`, `GET /people`, `GET /aircraft`, `GET /totals`, `GET /changes/:id` | Requests. The read routes and the status poll share one limit. | Connection |
+| `GET /me`, `GET /entries`, `GET /entries/:id`, `GET /people`, `GET /aircraft`, `GET /places`, `GET /totals`, `GET /changes/:id` | Requests. The read routes and the status poll share one limit. | Connection |
 | `POST /changes` | The operations in the request. A request over the limit is refused as a whole and stores nothing. This limit is separate from the one above. | Connection |
 | `POST /import` | The entries plus the people in the request. | Pilot |
 
@@ -531,6 +532,49 @@ curl -sS https://jetlog.app/api/partner/v1/aircraft \
 }
 ```
 
+### GET /places
+
+The pilot's own airports, which Jetlog calls places: an airport Jetlog's catalog does not know, such as a farm strip, or a catalog airport the pilot gave their own name, coordinates or time zone. For every code a place has, the place wins over the catalog when Jetlog calculates times. This route never lists the catalog itself, and removed places are left out.
+
+A place with an `icao` or an `iata` is an official airport, and its `code` is its ICAO code, else its IATA code. A place without either is a custom place, and `code` is the code the pilot gave it. Codes are in capital letters. Every value is as the pilot stored it, so any of them except `id` and `code` can be `null`.
+
+| Parameter | Meaning |
+| :-- | :-- |
+| `q` | Optional search. A place matches when its `code`, `icao` or `iata` starts with `q`, or its `name` contains `q`, in any case. At most 255 bytes. |
+| `limit` | Places per page, from 1 to 1000. 500 by default. |
+| `offset` | Where the page starts, 0 or more. 0 by default. |
+
+The places are ordered by code. `next_offset` is the `offset` of the next page, or `null` on the last page.
+
+```sh
+curl -sS "https://jetlog.app/api/partner/v1/places?q=eh" \
+  -H "Authorization: Bearer $ACCESS_TOKEN"
+```
+
+```json
+{
+  "places": [
+    {
+      "id": "2ea63a04-6f1b-4c8e-9d2a-7b5c3e1f0a98",
+      "code": "EHAM",
+      "icao": "EHAM",
+      "iata": "AMS",
+      "name": "Schiphol",
+      "latitude": 52.3086,
+      "longitude": 4.7639,
+      "country_code": "NL",
+      "timezone": "Europe/Amsterdam",
+      "kind": "airport"
+    }
+  ],
+  "limit": 500,
+  "offset": 0,
+  "next_offset": null
+}
+```
+
+A `q`, `limit` or `offset` that is not valid answers `400` with `{"error":"invalid_parameter"}`.
+
 ### GET /totals
 
 The pilot's flight time totals, in whole minutes, for the flights between `from` and `to`. Both are `YYYY-MM-DD`, both are included, and without them the totals cover the whole logbook. A figure is `null` when no flight in the range contributed to it. The object has one figure for every kind of time Jetlog calculates, and the example shows a selection.
@@ -838,23 +882,23 @@ An operation describes one change to one record.
 | Field | Meaning |
 | :-- | :-- |
 | `op` | `create`, `update` or `delete`. |
-| `resource` | `entry` for a flight, or `person` for a crew member. Other resources are not part of the partner API. |
-| `id` | The id of the flight or person. Required for `update` and `delete`. Optional for `create`: when you leave it out, Jetlog picks one. Send your own UUID when another operation in the same proposal refers to the record. |
+| `resource` | `entry` for a flight, `person` for a crew member, or `place` for one of the pilot's own airports. Other resources are not part of the partner API. |
+| `id` | The id of the flight, person or place. Required for `update` and `delete`. Optional for `create`: when you leave it out, Jetlog picks one. Send your own UUID when another operation in the same proposal refers to the record. |
 | `data` | An object with the fields to set. For `update`, send only the fields that change. A `delete` takes no `data`: leave it out. A key in the `data` of a `delete` is refused with a `422` that names the key. |
 | `add_self` | Optional, on an `entry` create only. See [Putting the pilot on a new flight](#putting-the-pilot-on-a-new-flight). It sits next to `op`, not inside `data`. |
 
 The rules:
 
 - A proposal has between 1 and 200 operations.
-- Two operations on the same record in one proposal are refused, with the `id` message `duplicate entry id <id> within this proposal` (or `duplicate person id <id> within this proposal`). Put every change to one record in one operation.
+- Two operations on the same record in one proposal are refused, with the `id` message `duplicate entry id <id> within this proposal` (or `duplicate person id <id> within this proposal`, `duplicate place id <id> within this proposal`). Put every change to one record in one operation.
 - A `create` whose `id` already exists is refused.
-- An `update` or `delete` can only target a flight or a crew member that the read routes can show. A flight that was removed, a simulator session, an id that does not exist and a record of another pilot all answer `entry <id> not found` (or `person <id> not found`).
+- An `update` or `delete` can only target a flight, a crew member or a place that the read routes can show. A flight that was removed, a simulator session, an id that does not exist and a record of another pilot all answer `entry <id> not found` (or `person <id> not found`, `place <id> not found`). So a removed place cannot be brought back by a proposal: create a new one.
 - A text value is at most 2000 characters, except `notes` of a person, which can be 10000. Every value in `data` is a single value. Only `people` is a list.
-- Jetlog applies people first and flights second, so a flight can refer to a person created in the same proposal.
-- A `delete` removes the flight or person. The pilot can undo an approved delete in the Jetlog app.
+- Jetlog applies places first, people second and flights last, so a flight can refer to a person created in the same proposal.
+- A `delete` removes the flight, person or place. The pilot can undo an approved delete in the Jetlog app.
 - A proposal can target any flight of the pilot, including one your app added. The import route changes those flights without approval, so use it for your own flights and new flights, and use a proposal for the rest.
 - Flights your app creates through an approved proposal become its own flights, so the import route can change them afterwards. An approved update to an existing flight does not make that flight the app's own.
-- The rules about what a proposal may contain are checked when the proposal is made and again when the pilot approves it: the resources, the fields and their sizes, the flight type, no `data` on a `delete`, no other field next to `"is_deleted": true`, and a true or false `is_deleted`. Two checks are made only when the proposal is made: that an `update` or `delete` targets a flight or crew member the read routes can show, and that the logbook would show the value you proposed. At approval Jetlog checks instead that the connection is still live, that your app still has the whole logbook level, and that nothing the proposal touches changed since it was made. A change since then makes the status `stale`, see [Statuses](#statuses).
+- The rules about what a proposal may contain are checked when the proposal is made and again when the pilot approves it: the resources, the fields and their sizes, the flight type, no `data` on a `delete`, no other field next to `"is_deleted": true`, and a true or false `is_deleted`. Two checks are made only when the proposal is made: that an `update` or `delete` targets a flight, crew member or place the read routes can show, and that the logbook would show the value you proposed. At approval Jetlog checks instead that the connection is still live, that your app still has the whole logbook level, and that nothing the proposal touches changed since it was made. A change since then makes the status `stale`, see [Statuses](#statuses).
 
 ### What a proposal may contain
 
@@ -866,7 +910,7 @@ Everything that breaks a rule is refused with a `422` that names the field, and 
 
 Proposing has no effect outside the preview Jetlog keeps for the pilot. The logbook is not changed, and nothing about it is sent to the pilot's devices, until the pilot approves. The only thing the pilot gets before that is the notification about the proposal.
 
-Only two resources can be proposed, `entry` for a flight and `person` for a crew member. A flight is always type `flight`: a create must say `"type": "flight"`, and an update cannot change the type.
+Three resources can be proposed: `entry` for a flight, `person` for a crew member and `place` for one of the pilot's own airports. A flight is always type `flight`: a create must say `"type": "flight"`, and an update cannot change the type.
 
 ### Fields of a flight
 
@@ -901,6 +945,29 @@ These are the fields of `data` for `resource` `person`.
 
 Creating a person does not look for an existing one, so read `GET /people` first and use the id of a person who is already there.
 
+### Fields of a place
+
+These are the fields of `data` for `resource` `place`. A proposal for a place follows the rules of the place editor in the Jetlog app, and the rules are checked when the proposal is made and again when the pilot approves it.
+
+| Field | Meaning |
+| :-- | :-- |
+| `icao`, `iata` | The ICAO and IATA codes of an official airport. Jetlog trims them and uses capital letters, and an empty string or `null` means none. |
+| `code` | The code of a place without an official code, such as `FARM1`. Leave it out for an official airport: its code is its `icao`, else its `iata`. On a create with `icao` or `iata`, a `code` that is not that value is refused. On a create without either, `code` is required. After a create the code never changes: sending the same code again is no change, any other code is refused. |
+| `name` | The name. Trimmed, an empty string clears it. |
+| `latitude`, `longitude` | Decimal degrees, as JSON numbers from -90 to 90 and from -180 to 180. A number in a string is refused. |
+| `country_code` | Two letters, ISO 3166, such as `NL`. An empty string clears it. |
+| `timezone` | An IANA time zone, such as `Europe/Amsterdam`. |
+| `kind` | `airport`, the only kind. Jetlog sets it on a create. |
+| `is_deleted` | `true` removes the place, the same as a `delete` operation. It has to be a JSON boolean, like on a flight, and an `update` that sets it to `true` carries no other field in `data`. |
+
+The rules that go beyond one field:
+
+- No two of the pilot's places may share a code, in any of `code`, `icao` and `iata`. A removed place does not count. An `update` is checked on the codes it changes, a create on all three.
+- A custom place, which has no `icao` and no `iata`, cannot get either through an `update`. The Jetlog app cannot do that either, because it would turn the place into an official airport and hide the code the pilot gave it. Remove the place and create the airport with its `icao` and `iata` instead, which can be done in one proposal.
+- Read `GET /places` first. Creating a place does not merge it with an existing one, and a create with a code that a place already has is refused.
+
+When a place's codes or coordinates change, or the place is removed, Jetlog calculates the times again for every flight that uses one of its codes. The pilot sees the place before and after in the review, like any other change.
+
 ### Flights that Jetlog tracks
 
 While `update_flight_data` is `true` on a flight, Jetlog follows it on its own. The actual times and the registration come from Jetlog's flight feed, and so do the date and the airports once the feed has them. The logbook then shows the feed's value, not yours, so a proposal for such a value is refused, unless it is the value the logbook already shows:
@@ -915,7 +982,7 @@ The message says why. When the flight follows the feed and the key is one the fe
 
 ### What cannot be proposed
 
-Anything that is not in the two tables above cannot be proposed. That includes the logged hours, takeoffs and landings, approaches, fuel, passengers, cargo, go-arounds, the completed flag, the tracking switch `update_flight_data`, the planned off blocks time, the actual airports of a diversion, aircraft and simulator sessions. An app sets the values of its own flights through the import route, which takes all of these. A flight of the pilot that the app did not add cannot get them from an app at all.
+Anything that is not in the three tables above cannot be proposed. That includes the logged hours, takeoffs and landings, approaches, fuel, passengers, cargo, go-arounds, the completed flag, the tracking switch `update_flight_data`, the planned off blocks time, the actual airports of a diversion, aircraft and simulator sessions. An app sets the values of its own flights through the import route, which takes all of these. A flight of the pilot that the app did not add cannot get them from an app at all.
 
 ### Refused with 422
 
@@ -925,10 +992,21 @@ The answer is the nested `422` body of [Errors per route](#errors-per-route), wi
 | :-- | :-- |
 | The key itself, for example `manual_times` | `connected apps cannot propose manual_times` |
 | The key itself, for example `off_blocks`, when the flight follows the flight feed | `Jetlog would show a different value than the one proposed for this flight, because the flight follows the flight feed, so connected apps cannot propose it` |
-| The key itself, for any other mismatch | `Jetlog would show a different value than the one proposed for this flight, so connected apps cannot propose it`. For a person the word `flight` is `person`. |
+| The key itself, for any other mismatch | `Jetlog would show a different value than the one proposed for this flight, so connected apps cannot propose it`. For a person the word `flight` is `person`, for a place `place`. |
 | `type` | `connected apps can only add flights (type "flight")`, or `connected apps can only change flights (type "flight")` on an update |
 | `resource` | `connected apps cannot propose changes to aircraft`, and the same for `fstd` |
-| `id` | `entry <id> not found`, or `person <id> not found`, and `duplicate entry id <id> within this proposal` when two operations name one record |
+| `id` | `entry <id> not found`, `person <id> not found` or `place <id> not found`, and `duplicate entry id <id> within this proposal` when two operations name one record |
+| `code` | `required: give icao and/or iata for an official airport, or code for a place without one` |
+| `code` | `must be the ICAO code (or the IATA code when there is no ICAO code) of an official airport; leave it out` |
+| `code` | `cannot be changed: delete the place and create a new one with the new code` |
+| `code`, `icao` or `iata` | `is already a code of your place <id>` |
+| `icao` or `iata` | `cannot be added to a place without an ICAO or IATA code (a custom place), which the Jetlog app cannot do either: delete the place and create the airport with its icao and iata` |
+| `code`, `icao`, `iata` or `name` | `must be a string` |
+| `latitude` | `must be a number from -90 to 90`, and for `longitude` `must be a number from -180 to 180` |
+| `country_code` | `must be a two-letter ISO country code` |
+| `timezone` | `must be an IANA time zone, for example Europe/Amsterdam` |
+| `kind` | `must be "airport"` |
+| `is_deleted` | `must be false on a create`, for a place created as removed |
 | `people` | `at most 20 crew members per flight`, `each crew member is an object with person_id and role`, or `must be a list of crew members` |
 | The key itself, for example `remarks` | `must be a single value` |
 | `is_deleted` | `must be true or false` |
@@ -1072,6 +1150,7 @@ The shape of an error depends on the route. The access errors, the import route 
 | `GET /entries` | `400` | `{"error":"invalid_type"}` | `type` is not `flight` or `fstd`. |
 | `GET /entries` | `400` | `{"error":"invalid_parameter"}` | `limit` is not a number. |
 | `GET /entries/:id` | `404` | `{"error":"not_found"}` | No such flight for this pilot, or it was removed. |
+| `GET /places` | `400` | `{"error":"invalid_parameter"}` | `q` is longer than 255 bytes, or `limit` or `offset` is not a number in range. |
 | `GET /totals` | `400` | `{"error":"invalid_date"}` | `from` or `to` is not a `YYYY-MM-DD` date. |
 | `POST /changes` | `401` | `{"error":"invalid_token"}` | The pilot disconnected your app a moment ago, after the token was accepted. Nothing was stored. The pilot has to connect again. |
 | `POST /changes` | `403` | `{"error":"insufficient_scope","message":"...","missing_scopes":["files"]}` | The proposal touches files, photos, signatures or signing links. See [What a proposal cannot contain](#what-a-proposal-cannot-contain). Nothing was stored. |
@@ -1132,6 +1211,7 @@ A body that is too large for the route answers `413` with a flat body that names
 | Length of a summary | 500 characters |
 | Length of a text value in an operation | 2000 characters, 10000 for the `notes` of a person |
 | Flights per page of `GET /entries` | 50 by default, 200 at most |
+| Places per page of `GET /places` | 500 by default, 1000 at most |
 | Access token | 1 hour |
 | Refresh token | 90 days. An app with a client secret keeps the same refresh token, an app without one gets a new one on every use |
 
@@ -1148,7 +1228,7 @@ At either level, an app cannot:
 - call anything outside the routes in this document. A partner token is refused everywhere else.
 - act without the pilot. Every connection is made by a pilot approving it, and the pilot can remove it at any time.
 - read proposals that another connection made.
-- propose a change to anything but flights and crew members, or one that the logbook would not show as proposed.
+- propose a change to anything but flights, crew members and the pilot's own airports, or one that the logbook would not show as proposed.
 
 At the own flights level an app also cannot read the logbook or propose changes. At the whole logbook level it still cannot change a flight it did not add without the pilot approving that change.
 
