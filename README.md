@@ -278,7 +278,7 @@ A partner sends the access token a pilot approved: `Authorization: Bearer <acces
 | Level | Scope | What the token can do |
 | :-- | :-- | :-- |
 | Own flights | `import` | Add flights, and change or delete the flights the partner created, through the import route below. It cannot read the logbook or change anything else. |
-| Whole logbook | `import read write` | The same, plus reading the logbook and proposing changes to flights and crew members. A proposal changes nothing until the pilot approves it in the Jetlog app. |
+| Whole logbook | `import read write` | The same, plus reading the logbook and proposing changes to flights, crew members and the pilot's own airports (places). A proposal changes nothing until the pilot approves it in the Jetlog app. |
 
 The partner asks for `scope=import` or `scope=import read write`, and the `scope` of the token response says what the pilot granted, which can be less than was asked. Jetlog enables the whole logbook level for each partner separately, on request in the developer console. The app also needs a client secret, approved redirect addresses and no loopback address among them, see [Asking for a level](PARTNER_API.md#asking-for-a-level). An app that does not meet these gets the own flights level when it asks for more. The read routes, the proposals and all their errors are in [PARTNER_API.md](PARTNER_API.md).
 

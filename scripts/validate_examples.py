@@ -269,6 +269,7 @@ PARTNER_ROUTES = {
     ("GET", "/entries/:id"): "read",
     ("GET", "/people"): "read",
     ("GET", "/aircraft"): "read",
+    ("GET", "/places"): "read",
     ("GET", "/totals"): "read",
     ("POST", "/changes"): "write",
     ("GET", "/changes/:id"): "write",
@@ -437,6 +438,10 @@ ENTRY_DATA_KEYS = {
     "touchdown", "on_blocks", "remarks", "people", "is_deleted",
 }
 ENTRY_TIME_KEYS = {"off_blocks", "airborne", "touchdown", "on_blocks"}
+PLACE_DATA_KEYS = {
+    "code", "icao", "iata", "name", "latitude", "longitude", "country_code", "timezone", "kind",
+    "is_deleted",
+}
 # On a flight Jetlog tracks, these follow the flight feed: a proposal for them is refused.
 FEED_KEYS = ENTRY_TIME_KEYS | {"registration"}
 PERSON_DATA_KEYS = {
@@ -466,8 +471,8 @@ REFUSAL_TEMPLATES = [
 REFUSAL_PATTERNS = [
     re.compile(r"connected apps cannot propose \w+"),
     re.compile(r"Jetlog would show a different value than the one proposed for this (flight|person), because the flight follows the flight feed, so connected apps cannot propose it"),
-    re.compile(r"Jetlog would show a different value than the one proposed for this (flight|person), so connected apps cannot propose it"),
-    re.compile(r"duplicate (entry|person) id [0-9a-f-]{36} within this proposal"),
+    re.compile(r"Jetlog would show a different value than the one proposed for this (flight|person|place), so connected apps cannot propose it"),
+    re.compile(r"duplicate (entry|person|place) id [0-9a-f-]{36} within this proposal"),
     re.compile(r'connected apps can only (add|change) flights \(type "flight"\)'),
     re.compile(r"connected apps cannot propose changes to \w+"),
     re.compile(r"at most 20 crew members per flight"),
@@ -477,7 +482,7 @@ REFUSAL_PATTERNS = [
     re.compile(r"a delete carries no data, \w+ is not allowed"),
     re.compile(r"a deletion carries no other data, \w+ is not allowed"),
     re.compile(r"must be true or false"),
-    re.compile(r"(entry|person) [0-9a-f-]{36} not found"),
+    re.compile(r"(entry|person|place) [0-9a-f-]{36} not found"),
     re.compile(r"unknown person_id\(s\): .+"),
 ]
 ENTRIES_QUERY = {
@@ -485,6 +490,7 @@ ENTRIES_QUERY = {
     "limit", "after_date", "after_id",
 }
 TOTALS_QUERY = {"from", "to"}
+PLACES_QUERY = {"q", "limit", "offset"}
 CALCULATED_FIELDS = {
     "pilot_in_command_role", "spic_role", "picus_role", "line_check_airman_role",
     "line_check_airman_initial_role", "senior_instructor_pic_role",
@@ -533,6 +539,10 @@ PREVIEW_ENTRY_KEYS = {
     "id", "type", "flight_number", "date", "registration", "from", "to", "off_blocks",
     "airborne", "touchdown", "on_blocks", "remarks", "is_deleted", "people",
 }
+PLACE_ROW_KEYS = {
+    "id", "code", "icao", "iata", "name", "latitude", "longitude", "country_code", "timezone",
+    "kind",
+}
 AIRCRAFT_ROW_KEYS = {
     "id", "use_system", "aircraft_icao_code", "aircraft_iata_code", "system_aircraft_icao_code",
     "system_aircraft_iata_code", "is_imported_from_other_logbook",
@@ -565,8 +575,8 @@ def timestamp(where: str, value: object) -> datetime.datetime | None:
 
 
 def check_data(where: str, resource: str, op: str, data: dict, known_people: set[str]) -> None:
-    allowed = ENTRY_DATA_KEYS if resource == "entry" else PERSON_DATA_KEYS
-    refused = REFUSED_ENTRY_KEYS if resource == "entry" else REFUSED_PERSON_KEYS
+    allowed = {"entry": ENTRY_DATA_KEYS, "person": PERSON_DATA_KEYS, "place": PLACE_DATA_KEYS}[resource]
+    refused = {"entry": REFUSED_ENTRY_KEYS, "person": REFUSED_PERSON_KEYS}.get(resource, set())
     for key in data:
         if key in refused:
             fail(where, f"`{key}` is refused in a partner proposal (files and signatures are never available)")
@@ -639,8 +649,8 @@ def check_proposal(
         if resource in REFUSED_RESOURCES:
             fail(at, f"`{resource}` is refused in a partner proposal (files and signatures are never available)")
             continue
-        if resource not in ("entry", "person"):
-            fail(at, "`resource` must be entry or person")
+        if resource not in ("entry", "person", "place"):
+            fail(at, "`resource` must be entry, person or place")
             continue
         if kind != "create" and not (isinstance(record_id, str) and UUID.fullmatch(record_id)):
             fail(at, "an update or delete needs the `id` of the record")
@@ -846,6 +856,15 @@ def check_partner_api(document: dict | None, app_id: str) -> None:
                 for key, values in query.items():
                     if not DATE.fullmatch(values[0]):
                         fail(at, f"`{key}` must be YYYY-MM-DD")
+            elif route == ("GET", "/places"):
+                if not set(query) <= PLACES_QUERY:
+                    fail(at, f"unknown query parameters {sorted(set(query) - PLACES_QUERY)}")
+                if "q" in query and len(query["q"][0].encode()) > 255:
+                    fail(at, "`q` is at most 255 bytes")
+                if "limit" in query and not (query["limit"][0].isdigit() and 1 <= int(query["limit"][0]) <= 1000):
+                    fail(at, "`limit` is 1 to 1000")
+                if "offset" in query and not query["offset"][0].isdigit():
+                    fail(at, "`offset` is 0 or more")
             elif query:
                 fail(at, f"{path} takes no query parameters")
             body_m = re.search(r"-d '(.*?)'", cmd, re.S)
@@ -899,6 +918,14 @@ def check_partner_api(document: dict | None, app_id: str) -> None:
             for person in body["people"]:
                 if set(person) != PERSON_ROW_KEYS:
                     fail(at, "a person row has the documented keys only")
+        elif "places" in body:
+            if set(body) != {"places", "limit", "offset", "next_offset"}:
+                fail(at, "`GET /places` has places, limit, offset and next_offset")
+            for place in body["places"]:
+                if set(place) != PLACE_ROW_KEYS:
+                    fail(at, "a place row has the documented keys only")
+                elif place["code"] != (place["icao"] or place["iata"] or place["code"]):
+                    fail(at, "the code of an official airport is its icao, else its iata")
         elif "aircraft" in body:
             for plane in body["aircraft"]:
                 if set(plane) != AIRCRAFT_ROW_KEYS:
