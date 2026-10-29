@@ -635,7 +635,7 @@ Needs `write`. The body has two fields:
 
 | Field | Meaning |
 | :-- | :-- |
-| `summary` | A short sentence describing the whole change. Plain text, at most 500 characters, and longer text is shortened. It is required. The pilot sees it with the proposal. |
+| `summary` | A short sentence describing the whole change. Plain text, at most 500 characters. Jetlog first removes control, bidi and zero-width characters and turns runs of white space into one space, then counts. A longer summary is refused with a `422`. It is required. The pilot sees it with the proposal. |
 | `operations` | The changes, from 1 to 200 of them. [The operations format](#the-operations-format) describes them. |
 
 This proposal corrects the registration on one flight:
@@ -1004,6 +1004,8 @@ The answer is the nested `422` body of [Errors per route](#errors-per-route), wi
 | `code`, `icao`, `iata` or `name` | `must be a string` |
 | `flight_number`, `registration`, `from`, `to`, `employee_number`, `default_role`, `code`, `icao` or `iata` | `must not contain control, bidi or zero-width characters` |
 | `latitude` | `must be a number from -90 to 90`, and for `longitude` `must be a number from -180 to 180` |
+| `remarks` | `should be at most 1000 character(s)`, with `index` `null` |
+| `summary` | `must be at most 500 characters`, with `index` `null` |
 | `country_code` | `must be a two-letter ISO country code` |
 | `timezone` | `must be an IANA time zone, for example Europe/Amsterdam` |
 | `kind` | `must be "airport"` |
@@ -1014,7 +1016,7 @@ The answer is the nested `422` body of [Errors per route](#errors-per-route), wi
 | The key itself, for example `flight_number`, in the `data` of a `delete` | `a delete carries no data, flight_number is not allowed` |
 | The key itself, for example `flight_number`, next to `"is_deleted": true` in the `data` of an `update` | `a deletion carries no other data, flight_number is not allowed` |
 
-The codes and numbers in that list are refused when they hold a character that the review screen would not show: a control character (U+0001 to U+001F and U+007F, so a tab or a line break too), a bidi control (U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) or a zero-width character (U+200B to U+200D, U+FEFF). Otherwise the pilot would approve a code that looks the same as another one but is stored differently. Names, `remarks` and `notes` may hold these characters. The review shows them cleaned, and Jetlog stores them as sent. A NUL character (U+0000) is refused in every field, see [Text Jetlog cannot store](#text-jetlog-cannot-store).
+The codes and numbers in that list are refused when they hold a character that the review screen would not show: a control character (U+0001 to U+001F and U+007F, so a tab or a line break too), a bidi control (U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) or a zero-width character (U+200B to U+200D, U+FEFF). Otherwise the pilot would approve a code that looks the same as another one but is stored differently. The import route refuses them in `flight_number`, `from`, `to` and `aircraft_icao_code` too, and skips that row as `invalid_field`. A value that was stored before this rule never blocks a change to another field. Names, `remarks` and `notes` may hold these characters. The review shows them cleaned, and Jetlog stores them as sent. A NUL character (U+0000) is refused in every field, see [Text Jetlog cannot store](#text-jetlog-cannot-store).
 
 ### What a proposal cannot contain
 
