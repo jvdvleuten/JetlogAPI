@@ -467,6 +467,9 @@ REFUSAL_TEMPLATES = [
     "a delete carries no data",
     "a deletion carries no other data",
     "must be true or false",
+    "must not contain control, bidi or zero-width characters",
+    "must not contain the NUL character (U+0000)",
+    "must be valid UTF-8 text",
 ]
 REFUSAL_PATTERNS = [
     re.compile(r"connected apps cannot propose \w+"),
@@ -484,6 +487,9 @@ REFUSAL_PATTERNS = [
     re.compile(r"must be true or false"),
     re.compile(r"(entry|person|place) [0-9a-f-]{36} not found"),
     re.compile(r"unknown person_id\(s\): .+"),
+    re.compile(r"must not contain control, bidi or zero-width characters"),
+    re.compile(r"must not contain the NUL character \(U\+0000\)"),
+    re.compile(r"must be valid UTF-8 text"),
 ]
 ENTRIES_QUERY = {
     "from", "to", "type", "registration", "airport", "flight_number", "person_id", "role",

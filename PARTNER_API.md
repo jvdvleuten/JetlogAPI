@@ -1002,6 +1002,7 @@ The answer is the nested `422` body of [Errors per route](#errors-per-route), wi
 | `code`, `icao` or `iata` | `is already a code of your place <id>` |
 | `icao` or `iata` | `cannot be added to a place without an ICAO or IATA code (a custom place), which the Jetlog app cannot do either: delete the place and create the airport with its icao and iata` |
 | `code`, `icao`, `iata` or `name` | `must be a string` |
+| `flight_number`, `registration`, `from`, `to`, `employee_number`, `default_role`, `code`, `icao` or `iata` | `must not contain control, bidi or zero-width characters` |
 | `latitude` | `must be a number from -90 to 90`, and for `longitude` `must be a number from -180 to 180` |
 | `country_code` | `must be a two-letter ISO country code` |
 | `timezone` | `must be an IANA time zone, for example Europe/Amsterdam` |
@@ -1012,6 +1013,8 @@ The answer is the nested `422` body of [Errors per route](#errors-per-route), wi
 | `is_deleted` | `must be true or false` |
 | The key itself, for example `flight_number`, in the `data` of a `delete` | `a delete carries no data, flight_number is not allowed` |
 | The key itself, for example `flight_number`, next to `"is_deleted": true` in the `data` of an `update` | `a deletion carries no other data, flight_number is not allowed` |
+
+The codes and numbers in that list are refused when they hold a character that the review screen would not show: a control character (U+0001 to U+001F and U+007F, so a tab or a line break too), a bidi control (U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069) or a zero-width character (U+200B to U+200D, U+FEFF). Otherwise the pilot would approve a code that looks the same as another one but is stored differently. Names, `remarks` and `notes` may hold these characters. The review shows them cleaned, and Jetlog stores them as sent. A NUL character (U+0000) is refused in every field, see [Text Jetlog cannot store](#text-jetlog-cannot-store).
 
 ### What a proposal cannot contain
 
@@ -1138,7 +1141,7 @@ curl -sS -X POST https://jetlog.app/api/partner/v1/changes \
 
 ## Errors per route
 
-Every route can also answer the access errors in [Who may call a route](#who-may-call-a-route) and `429` as described under [Rate limits](#rate-limits).
+Every route can also answer the access errors in [Who may call a route](#who-may-call-a-route), `429` as described under [Rate limits](#rate-limits), and the `422` of [Text Jetlog cannot store](#text-jetlog-cannot-store).
 
 The shape of an error depends on the route. The access errors, the import route and the read routes answer with a flat body, `{"error":"<code>"}`. The proposal routes answer with a nested body, `{"error":{"message":"...","code":"..."}}`, except for three flat answers: the `401` for a connection that was just disconnected, the refusal of files and signatures (which has a `message` and `missing_scopes` next to `error`), and the `413` for a body that is too large.
 
@@ -1195,6 +1198,26 @@ A body that is too large for the route answers `413` with a flat body that names
 ```json
 {"error": "payload_too_large", "max_bytes": 262144}
 ```
+
+### Text Jetlog cannot store
+
+A request whose text holds a NUL character (U+0000), or bytes that are not valid UTF-8, is refused on every route with a `422` and the code `invalid_text`, whatever the field. This is checked right after the token, before anything is read or stored, and covers the body, the query parameters and the path. Nothing is stripped: remove the character and send the request again. This `422` has the nested body on every route, the import and read routes included. Each item names the `field`, and `index` is the first list position on the way to it, or `null` without one. In a proposal the `field` is the key in `data`, the way the other proposal errors name it, and `index` is the operation:
+
+```json
+{
+  "error": {
+    "message": "Text must not contain the NUL character (U+0000) and must be valid UTF-8",
+    "code": "invalid_text",
+    "errors": [
+      {"index": 0, "field": "remarks", "message": "must not contain the NUL character (U+0000)"}
+    ]
+  }
+}
+```
+
+On the import route the `field` is the whole path in the body, such as `entries[3].remarks` with `index` 3. On a read route it is the query parameter, such as `q`, with `index` `null`. A text that is not valid UTF-8 gets the message `must be valid UTF-8 text`.
+
+The OAuth routes refuse the same text with a `400`. The token route answers `{"error":"invalid_request","error_description":"code must not contain the NUL character (U+0000)"}`, naming each parameter. The authorization page shows the pilot a plain error page and does not send the browser back to your app.
 
 ## Limits
 
